@@ -1,33 +1,5 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright(c) 2017 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Intel Corporation
  */
 
 #ifndef _RTE_SERVICE_PRIVATE_H_
@@ -37,21 +9,15 @@
  * Include this file if you are writing a component that requires CPU cycles to
  * operate, and you wish to run the component using service cores
  */
-
+#include <rte_compat.h>
 #include <rte_service.h>
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Signature of callback function to run a service.
  */
 typedef int32_t (*rte_service_func)(void *args);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * The specification of a service.
  *
  * This struct contains metadata about the service itself, the callback
@@ -75,9 +41,6 @@ struct rte_service_spec {
 };
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Register a new service.
  *
  * A service represents a component that the requires CPU time periodically to
@@ -85,21 +48,27 @@ struct rte_service_spec {
  *
  * For example the eventdev SW PMD requires CPU cycles to perform its
  * scheduling. This can be achieved by registering it as a service, and the
- * application can then assign CPU resources to it using
- * *rte_service_set_coremask*.
+ * application can then assign CPU resources to that service.
+ *
+ * Note that when a service component registers itself, it is not permitted to
+ * add or remove service-core threads, or modify lcore-to-service mappings. The
+ * only API that may be called by the service-component is
+ * *rte_service_component_runstate_set*, which indicates that the service
+ * component is ready to be executed.
  *
  * @param spec The specification of the service to register
+ * @param[out] service_id A pointer to a uint32_t, which will be filled in
+ *             during registration of the service. It is set to the integers
+ *             service number given to the service. This parameter may be NULL.
  * @retval 0 Successfully registered the service.
  *         -EINVAL Attempted to register an invalid service (eg, no callback
  *         set)
  */
-int32_t rte_service_register(const struct rte_service_spec *spec);
+int32_t rte_service_component_register(const struct rte_service_spec *spec,
+		uint32_t *service_id);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
- * Unregister a service.
+ * Unregister a service component.
  *
  * The service being removed must be stopped before calling this function.
  *
@@ -107,12 +76,9 @@ int32_t rte_service_register(const struct rte_service_spec *spec);
  * @retval -EBUSY The service is currently running, stop the service before
  *          calling unregister. No action has been taken.
  */
-int32_t rte_service_unregister(struct rte_service_spec *service);
+int32_t rte_service_component_unregister(uint32_t id);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Private function to allow EAL to initialized default mappings.
  *
  * This function iterates all the services, and maps then to the available
@@ -128,9 +94,20 @@ int32_t rte_service_unregister(struct rte_service_spec *service);
 int32_t rte_service_start_with_defaults(void);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
+ * Set the backend runstate of a component.
  *
+ * This function allows services to be registered at startup, but not yet
+ * enabled to run by default. When the service has been configured (via the
+ * usual method; eg rte_eventdev_configure, the service can mark itself as
+ * ready to run. The differentiation between backend runstate and
+ * service_runstate is that the backend runstate is set by the service
+ * component while the service runstate is reserved for application usage.
+ *
+ * @retval 0 Success
+ */
+int32_t rte_service_component_runstate_set(uint32_t id, uint32_t runstate);
+
+/**
  * Initialize the service library.
  *
  * In order to use the service library, it must be initialized. EAL initializes
@@ -140,5 +117,13 @@ int32_t rte_service_start_with_defaults(void);
  * @retval -EALREADY Service library is already initialized
  */
 int32_t rte_service_init(void);
+
+/**
+ * @internal Free up the memory that has been initialized.
+ * This routine is to be invoked prior to process termination.
+ *
+ * @retval None
+ */
+void rte_service_finalize(void);
 
 #endif /* _RTE_SERVICE_PRIVATE_H_ */

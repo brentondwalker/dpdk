@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016-2017 Intel Corporation
  */
 
 /*
@@ -41,15 +12,19 @@
 
 #include <rte_memzone.h>
 #include <rte_crypto.h>
+#include <rte_security.h>
 #include <rte_cryptodev.h>
 #include <rte_byteorder.h>
 #include <rte_errno.h>
 #include <rte_ip.h>
 #include <rte_random.h>
+#include <rte_ethdev.h>
 
 #include "ipsec.h"
 #include "esp.h"
 #include "parser.h"
+
+#define IPDEFTTL 64
 
 struct supported_cipher_algo {
 	const char *keyword;
@@ -94,11 +69,25 @@ const struct supported_cipher_algo cipher_algos[] = {
 		.key_len = 16
 	},
 	{
+		.keyword = "aes-256-cbc",
+		.algo = RTE_CRYPTO_CIPHER_AES_CBC,
+		.iv_len = 16,
+		.block_size = 16,
+		.key_len = 32
+	},
+	{
 		.keyword = "aes-128-ctr",
 		.algo = RTE_CRYPTO_CIPHER_AES_CTR,
 		.iv_len = 8,
 		.block_size = 16, /* XXX AESNI MB limition, should be 4 */
 		.key_len = 20
+	},
+	{
+		.keyword = "3des-cbc",
+		.algo = RTE_CRYPTO_CIPHER_3DES_CBC,
+		.iv_len = 8,
+		.block_size = 8,
+		.key_len = 24
 	}
 };
 
@@ -238,6 +227,8 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 	uint32_t src_p = 0;
 	uint32_t dst_p = 0;
 	uint32_t mode_p = 0;
+	uint32_t type_p = 0;
+	uint32_t portid_p = 0;
 
 	if (strcmp(tokens[0], "in") == 0) {
 		ri = &nb_sa_in;
@@ -262,6 +253,8 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 	/* spi number */
 	APP_CHECK_TOKEN_IS_NUM(tokens, 1, status);
 	if (status->status < 0)
+		return;
+	if (atoi(tokens[1]) == INVALID_SPI)
 		return;
 	rule->spi = atoi(tokens[1]);
 
@@ -341,7 +334,8 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			if (status->status < 0)
 				return;
 
-			if (algo->algo == RTE_CRYPTO_CIPHER_AES_CBC)
+			if (algo->algo == RTE_CRYPTO_CIPHER_AES_CBC ||
+				algo->algo == RTE_CRYPTO_CIPHER_3DES_CBC)
 				rule->salt = (uint32_t)rte_rand();
 
 			if (algo->algo == RTE_CRYPTO_CIPHER_AES_CTR) {
@@ -375,7 +369,6 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			rule->auth_algo = algo->algo;
 			rule->auth_key_len = algo->key_len;
 			rule->digest_len = algo->digest_len;
-			rule->aad_len = algo->key_len;
 
 			/* NULL algorithm and combined algos do not
 			 * require auth key
@@ -431,7 +424,7 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			rule->aead_algo = algo->algo;
 			rule->cipher_key_len = algo->key_len;
 			rule->digest_len = algo->digest_len;
-			rule->aad_len = algo->key_len;
+			rule->aad_len = algo->aad_len;
 			rule->block_size = algo->block_size;
 			rule->iv_len = algo->iv_len;
 
@@ -550,6 +543,52 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			continue;
 		}
 
+		if (strcmp(tokens[ti], "type") == 0) {
+			APP_CHECK_PRESENCE(type_p, tokens[ti], status);
+			if (status->status < 0)
+				return;
+
+			INCREMENT_TOKEN_INDEX(ti, n_tokens, status);
+			if (status->status < 0)
+				return;
+
+			if (strcmp(tokens[ti], "inline-crypto-offload") == 0)
+				rule->type =
+					RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO;
+			else if (strcmp(tokens[ti],
+					"inline-protocol-offload") == 0)
+				rule->type =
+				RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL;
+			else if (strcmp(tokens[ti],
+					"lookaside-protocol-offload") == 0)
+				rule->type =
+				RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL;
+			else if (strcmp(tokens[ti], "no-offload") == 0)
+				rule->type = RTE_SECURITY_ACTION_TYPE_NONE;
+			else {
+				APP_CHECK(0, status, "Invalid input \"%s\"",
+						tokens[ti]);
+				return;
+			}
+
+			type_p = 1;
+			continue;
+		}
+
+		if (strcmp(tokens[ti], "port_id") == 0) {
+			APP_CHECK_PRESENCE(portid_p, tokens[ti], status);
+			if (status->status < 0)
+				return;
+			INCREMENT_TOKEN_INDEX(ti, n_tokens, status);
+			if (status->status < 0)
+				return;
+			rule->portid = atoi(tokens[ti]);
+			if (status->status < 0)
+				return;
+			portid_p = 1;
+			continue;
+		}
+
 		/* unrecognizeable input */
 		APP_CHECK(0, status, "unrecognized input \"%s\"",
 			tokens[ti]);
@@ -580,6 +619,14 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 	if (status->status < 0)
 		return;
 
+	if ((rule->type != RTE_SECURITY_ACTION_TYPE_NONE) && (portid_p == 0))
+		printf("Missing portid option, falling back to non-offload\n");
+
+	if (!type_p || !portid_p) {
+		rule->type = RTE_SECURITY_ACTION_TYPE_NONE;
+		rule->portid = -1;
+	}
+
 	*ri = *ri + 1;
 }
 
@@ -592,7 +639,8 @@ print_one_sa_rule(const struct ipsec_sa *sa, int inbound)
 	printf("\tspi_%s(%3u):", inbound?"in":"out", sa->spi);
 
 	for (i = 0; i < RTE_DIM(cipher_algos); i++) {
-		if (cipher_algos[i].algo == sa->cipher_algo) {
+		if (cipher_algos[i].algo == sa->cipher_algo &&
+				cipher_algos[i].key_len == sa->cipher_key_len) {
 			printf("%s ", cipher_algos[i].keyword);
 			break;
 		}
@@ -647,9 +695,11 @@ print_one_sa_rule(const struct ipsec_sa *sa, int inbound)
 
 struct sa_ctx {
 	struct ipsec_sa sa[IPSEC_SA_MAX_ENTRIES];
-	struct {
-		struct rte_crypto_sym_xform a;
-		struct rte_crypto_sym_xform b;
+	union {
+		struct {
+			struct rte_crypto_sym_xform a;
+			struct rte_crypto_sym_xform b;
+		};
 	} xf[IPSEC_SA_MAX_ENTRIES];
 };
 
@@ -682,6 +732,33 @@ sa_create(const char *name, int32_t socket_id)
 }
 
 static int
+check_eth_dev_caps(uint16_t portid, uint32_t inbound)
+{
+	struct rte_eth_dev_info dev_info;
+
+	rte_eth_dev_info_get(portid, &dev_info);
+
+	if (inbound) {
+		if ((dev_info.rx_offload_capa &
+				DEV_RX_OFFLOAD_SECURITY) == 0) {
+			RTE_LOG(WARNING, PORT,
+				"hardware RX IPSec offload is not supported\n");
+			return -EINVAL;
+		}
+
+	} else { /* outbound */
+		if ((dev_info.tx_offload_capa &
+				DEV_TX_OFFLOAD_SECURITY) == 0) {
+			RTE_LOG(WARNING, PORT,
+				"hardware TX IPSec offload is not supported\n");
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
+
+static int
 sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 		uint32_t nb_entries, uint32_t inbound)
 {
@@ -700,6 +777,16 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 		*sa = entries[i];
 		sa->seq = 0;
 
+		if (sa->type == RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL ||
+			sa->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO) {
+			if (check_eth_dev_caps(sa->portid, inbound))
+				return -EINVAL;
+		}
+
+		sa->direction = (inbound == 1) ?
+				RTE_SECURITY_IPSEC_SA_DIR_INGRESS :
+				RTE_SECURITY_IPSEC_SA_DIR_EGRESS;
+
 		switch (sa->flags) {
 		case IP4_TUNNEL:
 			sa->src.ip.ip4 = rte_cpu_to_be_32(sa->src.ip.ip4);
@@ -709,37 +796,21 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 		if (sa->aead_algo == RTE_CRYPTO_AEAD_AES_GCM) {
 			iv_length = 16;
 
-			if (inbound) {
-				sa_ctx->xf[idx].a.type = RTE_CRYPTO_SYM_XFORM_AEAD;
-				sa_ctx->xf[idx].a.aead.algo = sa->aead_algo;
-				sa_ctx->xf[idx].a.aead.key.data = sa->cipher_key;
-				sa_ctx->xf[idx].a.aead.key.length =
-					sa->cipher_key_len;
-				sa_ctx->xf[idx].a.aead.op =
-					RTE_CRYPTO_AEAD_OP_DECRYPT;
-				sa_ctx->xf[idx].a.next = NULL;
-				sa_ctx->xf[idx].a.aead.iv.offset = IV_OFFSET;
-				sa_ctx->xf[idx].a.aead.iv.length = iv_length;
-				sa_ctx->xf[idx].a.aead.aad_length =
-					sa->aad_len;
-				sa_ctx->xf[idx].a.aead.digest_length =
-					sa->digest_len;
-			} else { /* outbound */
-				sa_ctx->xf[idx].a.type = RTE_CRYPTO_SYM_XFORM_AEAD;
-				sa_ctx->xf[idx].a.aead.algo = sa->aead_algo;
-				sa_ctx->xf[idx].a.aead.key.data = sa->cipher_key;
-				sa_ctx->xf[idx].a.aead.key.length =
-					sa->cipher_key_len;
-				sa_ctx->xf[idx].a.aead.op =
-					RTE_CRYPTO_AEAD_OP_ENCRYPT;
-				sa_ctx->xf[idx].a.next = NULL;
-				sa_ctx->xf[idx].a.aead.iv.offset = IV_OFFSET;
-				sa_ctx->xf[idx].a.aead.iv.length = iv_length;
-				sa_ctx->xf[idx].a.aead.aad_length =
-					sa->aad_len;
-				sa_ctx->xf[idx].a.aead.digest_length =
-					sa->digest_len;
-			}
+			sa_ctx->xf[idx].a.type = RTE_CRYPTO_SYM_XFORM_AEAD;
+			sa_ctx->xf[idx].a.aead.algo = sa->aead_algo;
+			sa_ctx->xf[idx].a.aead.key.data = sa->cipher_key;
+			sa_ctx->xf[idx].a.aead.key.length =
+				sa->cipher_key_len;
+			sa_ctx->xf[idx].a.aead.op = (inbound == 1) ?
+				RTE_CRYPTO_AEAD_OP_DECRYPT :
+				RTE_CRYPTO_AEAD_OP_ENCRYPT;
+			sa_ctx->xf[idx].a.next = NULL;
+			sa_ctx->xf[idx].a.aead.iv.offset = IV_OFFSET;
+			sa_ctx->xf[idx].a.aead.iv.length = iv_length;
+			sa_ctx->xf[idx].a.aead.aad_length =
+				sa->aad_len;
+			sa_ctx->xf[idx].a.aead.digest_length =
+				sa->digest_len;
 
 			sa->xforms = &sa_ctx->xf[idx].a;
 
@@ -747,6 +818,7 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 		} else {
 			switch (sa->cipher_algo) {
 			case RTE_CRYPTO_CIPHER_NULL:
+			case RTE_CRYPTO_CIPHER_3DES_CBC:
 			case RTE_CRYPTO_CIPHER_AES_CBC:
 				iv_length = sa->iv_len;
 				break;
@@ -876,7 +948,7 @@ inbound_sa_check(struct sa_ctx *sa_ctx, struct rte_mbuf *m, uint32_t sa_idx)
 {
 	struct ipsec_mbuf_metadata *priv;
 
-	priv = RTE_PTR_ADD(m, sizeof(struct rte_mbuf));
+	priv = get_priv(m);
 
 	return (sa_ctx->sa[sa_idx].spi == priv->sa->spi);
 }

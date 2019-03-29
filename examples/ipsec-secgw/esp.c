@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016-2017 Intel Corporation
  */
 
 #include <stdint.h>
@@ -58,8 +29,11 @@ esp_inbound(struct rte_mbuf *m, struct ipsec_sa *sa,
 	struct rte_crypto_sym_op *sym_cop;
 	int32_t payload_len, ip_hdr_len;
 
-	RTE_ASSERT(m != NULL);
 	RTE_ASSERT(sa != NULL);
+	if (sa->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO)
+		return 0;
+
+	RTE_ASSERT(m != NULL);
 	RTE_ASSERT(cop != NULL);
 
 	ip4 = rte_pktmbuf_mtod(m, struct ip *);
@@ -103,12 +77,12 @@ esp_inbound(struct rte_mbuf *m, struct ipsec_sa *sa,
 		aad = get_aad(m);
 		memcpy(aad, iv - sizeof(struct esp_hdr), 8);
 		sym_cop->aead.aad.data = aad;
-		sym_cop->aead.aad.phys_addr = rte_pktmbuf_mtophys_offset(m,
+		sym_cop->aead.aad.phys_addr = rte_pktmbuf_iova_offset(m,
 				aad - rte_pktmbuf_mtod(m, uint8_t *));
 
 		sym_cop->aead.digest.data = rte_pktmbuf_mtod_offset(m, void*,
 				rte_pktmbuf_pkt_len(m) - sa->digest_len);
-		sym_cop->aead.digest.phys_addr = rte_pktmbuf_mtophys_offset(m,
+		sym_cop->aead.digest.phys_addr = rte_pktmbuf_iova_offset(m,
 				rte_pktmbuf_pkt_len(m) - sa->digest_len);
 	} else {
 		sym_cop->cipher.data.offset =  ip_hdr_len + sizeof(struct esp_hdr) +
@@ -122,6 +96,7 @@ esp_inbound(struct rte_mbuf *m, struct ipsec_sa *sa,
 
 		switch (sa->cipher_algo) {
 		case RTE_CRYPTO_CIPHER_NULL:
+		case RTE_CRYPTO_CIPHER_3DES_CBC:
 		case RTE_CRYPTO_CIPHER_AES_CBC:
 			/* Copy IV at the end of crypto operation */
 			rte_memcpy(iv_ptr, iv, sa->iv_len);
@@ -154,7 +129,7 @@ esp_inbound(struct rte_mbuf *m, struct ipsec_sa *sa,
 
 		sym_cop->auth.digest.data = rte_pktmbuf_mtod_offset(m, void*,
 				rte_pktmbuf_pkt_len(m) - sa->digest_len);
-		sym_cop->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(m,
+		sym_cop->auth.digest.phys_addr = rte_pktmbuf_iova_offset(m,
 				rte_pktmbuf_pkt_len(m) - sa->digest_len);
 	}
 
@@ -175,27 +150,43 @@ esp_inbound_post(struct rte_mbuf *m, struct ipsec_sa *sa,
 	RTE_ASSERT(sa != NULL);
 	RTE_ASSERT(cop != NULL);
 
+	if ((sa->type == RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL) ||
+			(sa->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO)) {
+		if (m->ol_flags & PKT_RX_SEC_OFFLOAD) {
+			if (m->ol_flags & PKT_RX_SEC_OFFLOAD_FAILED)
+				cop->status = RTE_CRYPTO_OP_STATUS_ERROR;
+			else
+				cop->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
+		} else
+			cop->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
+	}
+
 	if (cop->status != RTE_CRYPTO_OP_STATUS_SUCCESS) {
 		RTE_LOG(ERR, IPSEC_ESP, "failed crypto op\n");
 		return -1;
 	}
 
-	nexthdr = rte_pktmbuf_mtod_offset(m, uint8_t*,
-			rte_pktmbuf_pkt_len(m) - sa->digest_len - 1);
-	pad_len = nexthdr - 1;
+	if (sa->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO &&
+	    sa->ol_flags & RTE_SECURITY_RX_HW_TRAILER_OFFLOAD) {
+		nexthdr = &m->inner_esp_next_proto;
+	} else {
+		nexthdr = rte_pktmbuf_mtod_offset(m, uint8_t*,
+				rte_pktmbuf_pkt_len(m) - sa->digest_len - 1);
+		pad_len = nexthdr - 1;
 
-	padding = pad_len - *pad_len;
-	for (i = 0; i < *pad_len; i++) {
-		if (padding[i] != i + 1) {
-			RTE_LOG(ERR, IPSEC_ESP, "invalid padding\n");
+		padding = pad_len - *pad_len;
+		for (i = 0; i < *pad_len; i++) {
+			if (padding[i] != i + 1) {
+				RTE_LOG(ERR, IPSEC_ESP, "invalid padding\n");
+				return -EINVAL;
+			}
+		}
+
+		if (rte_pktmbuf_trim(m, *pad_len + 2 + sa->digest_len)) {
+			RTE_LOG(ERR, IPSEC_ESP,
+					"failed to remove pad_len + digest\n");
 			return -EINVAL;
 		}
-	}
-
-	if (rte_pktmbuf_trim(m, *pad_len + 2 + sa->digest_len)) {
-		RTE_LOG(ERR, IPSEC_ESP,
-				"failed to remove pad_len + digest\n");
-		return -EINVAL;
 	}
 
 	if (unlikely(sa->flags == TRANSPORT)) {
@@ -211,7 +202,8 @@ esp_inbound_post(struct rte_mbuf *m, struct ipsec_sa *sa,
 			/* XXX No option headers supported */
 			memmove(ip6, ip, sizeof(struct ip6_hdr));
 			ip6->ip6_nxt = *nexthdr;
-			ip6->ip6_plen = htons(rte_pktmbuf_data_len(m));
+			ip6->ip6_plen = htons(rte_pktmbuf_data_len(m) -
+					      sizeof(struct ip6_hdr));
 		}
 	} else
 		ipip_inbound(m, sizeof(struct esp_hdr) + sa->iv_len);
@@ -226,14 +218,13 @@ esp_outbound(struct rte_mbuf *m, struct ipsec_sa *sa,
 	struct ip *ip4;
 	struct ip6_hdr *ip6;
 	struct esp_hdr *esp = NULL;
-	uint8_t *padding, *new_ip, nlp;
+	uint8_t *padding = NULL, *new_ip, nlp;
 	struct rte_crypto_sym_op *sym_cop;
 	int32_t i;
 	uint16_t pad_payload_len, pad_len, ip_hdr_len;
 
 	RTE_ASSERT(m != NULL);
 	RTE_ASSERT(sa != NULL);
-	RTE_ASSERT(cop != NULL);
 
 	ip_hdr_len = 0;
 
@@ -283,12 +274,19 @@ esp_outbound(struct rte_mbuf *m, struct ipsec_sa *sa,
 		return -EINVAL;
 	}
 
-	padding = (uint8_t *)rte_pktmbuf_append(m, pad_len + sa->digest_len);
-	if (unlikely(padding == NULL)) {
-		RTE_LOG(ERR, IPSEC_ESP, "not enough mbuf trailing space\n");
-		return -ENOSPC;
+	/* Add trailer padding if it is not constructed by HW */
+	if (sa->type != RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO ||
+	    (sa->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO &&
+	     !(sa->ol_flags & RTE_SECURITY_TX_HW_TRAILER_OFFLOAD))) {
+		padding = (uint8_t *)rte_pktmbuf_append(m, pad_len +
+							sa->digest_len);
+		if (unlikely(padding == NULL)) {
+			RTE_LOG(ERR, IPSEC_ESP,
+					"not enough mbuf trailing space\n");
+			return -ENOSPC;
+		}
+		rte_prefetch0(padding);
 	}
-	rte_prefetch0(padding);
 
 	switch (sa->flags) {
 	case IP4_TUNNEL:
@@ -306,14 +304,15 @@ esp_outbound(struct rte_mbuf *m, struct ipsec_sa *sa,
 				sizeof(struct esp_hdr) + sa->iv_len);
 		memmove(new_ip, ip4, ip_hdr_len);
 		esp = (struct esp_hdr *)(new_ip + ip_hdr_len);
+		ip4 = (struct ip *)new_ip;
 		if (likely(ip4->ip_v == IPVERSION)) {
-			ip4 = (struct ip *)new_ip;
 			ip4->ip_p = IPPROTO_ESP;
 			ip4->ip_len = htons(rte_pktmbuf_data_len(m));
 		} else {
 			ip6 = (struct ip6_hdr *)new_ip;
 			ip6->ip6_nxt = IPPROTO_ESP;
-			ip6->ip6_plen = htons(rte_pktmbuf_data_len(m));
+			ip6->ip6_plen = htons(rte_pktmbuf_data_len(m) -
+					      sizeof(struct ip6_hdr));
 		}
 	}
 
@@ -321,15 +320,47 @@ esp_outbound(struct rte_mbuf *m, struct ipsec_sa *sa,
 	esp->spi = rte_cpu_to_be_32(sa->spi);
 	esp->seq = rte_cpu_to_be_32((uint32_t)sa->seq);
 
+	/* set iv */
 	uint64_t *iv = (uint64_t *)(esp + 1);
+	if (sa->aead_algo == RTE_CRYPTO_AEAD_AES_GCM) {
+		*iv = rte_cpu_to_be_64(sa->seq);
+	} else {
+		switch (sa->cipher_algo) {
+		case RTE_CRYPTO_CIPHER_NULL:
+		case RTE_CRYPTO_CIPHER_3DES_CBC:
+		case RTE_CRYPTO_CIPHER_AES_CBC:
+			memset(iv, 0, sa->iv_len);
+			break;
+		case RTE_CRYPTO_CIPHER_AES_CTR:
+			*iv = rte_cpu_to_be_64(sa->seq);
+			break;
+		default:
+			RTE_LOG(ERR, IPSEC_ESP,
+				"unsupported cipher algorithm %u\n",
+				sa->cipher_algo);
+			return -EINVAL;
+		}
+	}
 
+	if (sa->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO) {
+		if (sa->ol_flags & RTE_SECURITY_TX_HW_TRAILER_OFFLOAD) {
+			/* Set the inner esp next protocol for HW trailer */
+			m->inner_esp_next_proto = nlp;
+			m->packet_type |= RTE_PTYPE_TUNNEL_ESP;
+		} else {
+			padding[pad_len - 2] = pad_len - 2;
+			padding[pad_len - 1] = nlp;
+		}
+		goto done;
+	}
+
+	RTE_ASSERT(cop != NULL);
 	sym_cop = get_sym_cop(cop);
 	sym_cop->m_src = m;
 
 	if (sa->aead_algo == RTE_CRYPTO_AEAD_AES_GCM) {
 		uint8_t *aad;
 
-		*iv = sa->seq;
 		sym_cop->aead.data.offset = ip_hdr_len +
 			sizeof(struct esp_hdr) + sa->iv_len;
 		sym_cop->aead.data.length = pad_payload_len;
@@ -342,30 +373,29 @@ esp_outbound(struct rte_mbuf *m, struct ipsec_sa *sa,
 
 		struct cnt_blk *icb = get_cnt_blk(m);
 		icb->salt = sa->salt;
-		icb->iv = sa->seq;
+		icb->iv = rte_cpu_to_be_64(sa->seq);
 		icb->cnt = rte_cpu_to_be_32(1);
 
 		aad = get_aad(m);
 		memcpy(aad, esp, 8);
 		sym_cop->aead.aad.data = aad;
-		sym_cop->aead.aad.phys_addr = rte_pktmbuf_mtophys_offset(m,
+		sym_cop->aead.aad.phys_addr = rte_pktmbuf_iova_offset(m,
 				aad - rte_pktmbuf_mtod(m, uint8_t *));
 
 		sym_cop->aead.digest.data = rte_pktmbuf_mtod_offset(m, uint8_t *,
 			rte_pktmbuf_pkt_len(m) - sa->digest_len);
-		sym_cop->aead.digest.phys_addr = rte_pktmbuf_mtophys_offset(m,
+		sym_cop->aead.digest.phys_addr = rte_pktmbuf_iova_offset(m,
 			rte_pktmbuf_pkt_len(m) - sa->digest_len);
 	} else {
 		switch (sa->cipher_algo) {
 		case RTE_CRYPTO_CIPHER_NULL:
+		case RTE_CRYPTO_CIPHER_3DES_CBC:
 		case RTE_CRYPTO_CIPHER_AES_CBC:
-			memset(iv, 0, sa->iv_len);
 			sym_cop->cipher.data.offset = ip_hdr_len +
 				sizeof(struct esp_hdr);
 			sym_cop->cipher.data.length = pad_payload_len + sa->iv_len;
 			break;
 		case RTE_CRYPTO_CIPHER_AES_CTR:
-			*iv = sa->seq;
 			sym_cop->cipher.data.offset = ip_hdr_len +
 				sizeof(struct esp_hdr) + sa->iv_len;
 			sym_cop->cipher.data.length = pad_payload_len;
@@ -384,7 +414,7 @@ esp_outbound(struct rte_mbuf *m, struct ipsec_sa *sa,
 
 		struct cnt_blk *icb = get_cnt_blk(m);
 		icb->salt = sa->salt;
-		icb->iv = sa->seq;
+		icb->iv = rte_cpu_to_be_64(sa->seq);
 		icb->cnt = rte_cpu_to_be_32(1);
 
 		switch (sa->auth_algo) {
@@ -403,25 +433,31 @@ esp_outbound(struct rte_mbuf *m, struct ipsec_sa *sa,
 
 		sym_cop->auth.digest.data = rte_pktmbuf_mtod_offset(m, uint8_t *,
 				rte_pktmbuf_pkt_len(m) - sa->digest_len);
-		sym_cop->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(m,
+		sym_cop->auth.digest.phys_addr = rte_pktmbuf_iova_offset(m,
 				rte_pktmbuf_pkt_len(m) - sa->digest_len);
 	}
 
+done:
 	return 0;
 }
 
 int
-esp_outbound_post(struct rte_mbuf *m __rte_unused,
-		struct ipsec_sa *sa __rte_unused,
-		struct rte_crypto_op *cop)
+esp_outbound_post(struct rte_mbuf *m,
+		  struct ipsec_sa *sa,
+		  struct rte_crypto_op *cop)
 {
 	RTE_ASSERT(m != NULL);
 	RTE_ASSERT(sa != NULL);
-	RTE_ASSERT(cop != NULL);
 
-	if (cop->status != RTE_CRYPTO_OP_STATUS_SUCCESS) {
-		RTE_LOG(ERR, IPSEC_ESP, "Failed crypto op\n");
-		return -1;
+	if ((sa->type == RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL) ||
+			(sa->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO)) {
+		m->ol_flags |= PKT_TX_SEC_OFFLOAD;
+	} else {
+		RTE_ASSERT(cop != NULL);
+		if (cop->status != RTE_CRYPTO_OP_STATUS_SUCCESS) {
+			RTE_LOG(ERR, IPSEC_ESP, "Failed crypto op\n");
+			return -1;
+		}
 	}
 
 	return 0;

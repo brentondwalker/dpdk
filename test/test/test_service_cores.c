@@ -1,33 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2017 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Intel Corporation
  */
 
 #include <rte_common.h>
@@ -131,17 +103,13 @@ static int
 unregister_all(void)
 {
 	uint32_t i;
-	struct rte_service_spec *dead = (struct rte_service_spec *)0xdead;
 
-	TEST_ASSERT_EQUAL(-EINVAL, rte_service_unregister(0),
-			"Unregistered NULL pointer");
-	TEST_ASSERT_EQUAL(-EINVAL, rte_service_unregister(dead),
-			"Unregistered invalid pointer");
+	TEST_ASSERT_EQUAL(-EINVAL, rte_service_component_unregister(1000),
+			"Unregistered invalid service id");
 
 	uint32_t c = rte_service_get_count();
 	for (i = 0; i < c; i++) {
-		struct rte_service_spec *s = rte_service_get_by_id(i);
-		TEST_ASSERT_EQUAL(0, rte_service_unregister(s),
+		TEST_ASSERT_EQUAL(0, rte_service_component_unregister(i),
 				"Error unregistering a valid service");
 	}
 
@@ -160,16 +128,21 @@ dummy_register(void)
 	struct rte_service_spec service;
 	memset(&service, 0, sizeof(struct rte_service_spec));
 
-	TEST_ASSERT_EQUAL(-EINVAL, rte_service_register(&service),
+	TEST_ASSERT_EQUAL(-EINVAL,
+			rte_service_component_register(&service, NULL),
 			"Invalid callback");
 	service.callback = dummy_cb;
 
-	TEST_ASSERT_EQUAL(-EINVAL, rte_service_register(&service),
+	TEST_ASSERT_EQUAL(-EINVAL,
+			rte_service_component_register(&service, NULL),
 			"Invalid name");
 	snprintf(service.name, sizeof(service.name), DUMMY_SERVICE_NAME);
 
-	TEST_ASSERT_EQUAL(0, rte_service_register(&service),
+	uint32_t id;
+	TEST_ASSERT_EQUAL(0, rte_service_component_register(&service, &id),
 			"Failed to register valid service");
+
+	rte_service_component_runstate_set(id, 1);
 
 	return TEST_SUCCESS;
 }
@@ -180,32 +153,41 @@ service_get_by_name(void)
 {
 	unregister_all();
 
-	/* ensure with no services registered returns NULL */
-	TEST_ASSERT_EQUAL(0, rte_service_get_by_name(DUMMY_SERVICE_NAME),
-			"Service get by name should return NULL");
+	uint32_t sid;
+	TEST_ASSERT_EQUAL(-ENODEV,
+			rte_service_get_by_name(DUMMY_SERVICE_NAME, &sid),
+			"get by name with invalid name should return -ENODEV");
+	TEST_ASSERT_EQUAL(-EINVAL,
+			rte_service_get_by_name(DUMMY_SERVICE_NAME, 0x0),
+			"get by name with NULL ptr should return -ENODEV");
 
 	/* register service */
 	struct rte_service_spec service;
 	memset(&service, 0, sizeof(struct rte_service_spec));
-	TEST_ASSERT_EQUAL(-EINVAL, rte_service_register(&service),
+	TEST_ASSERT_EQUAL(-EINVAL,
+			rte_service_component_register(&service, NULL),
 			"Invalid callback");
 	service.callback = dummy_cb;
-	TEST_ASSERT_EQUAL(-EINVAL, rte_service_register(&service),
+	TEST_ASSERT_EQUAL(-EINVAL,
+			rte_service_component_register(&service, NULL),
 			"Invalid name");
 	snprintf(service.name, sizeof(service.name), DUMMY_SERVICE_NAME);
-	TEST_ASSERT_EQUAL(0, rte_service_register(&service),
+	TEST_ASSERT_EQUAL(0, rte_service_component_register(&service, NULL),
 			"Failed to register valid service");
 
-	/* ensure with dummy services registered returns same ptr as ID */
-	struct rte_service_spec *s_by_id = rte_service_get_by_id(0);
-	TEST_ASSERT_EQUAL(s_by_id, rte_service_get_by_name(DUMMY_SERVICE_NAME),
-			"Service get_by_name should equal get_by_id()");
+	/* we unregistered all service, now registering 1, should be id 0 */
+	uint32_t service_id_as_expected = 0;
+	TEST_ASSERT_EQUAL(0, rte_service_get_by_name(DUMMY_SERVICE_NAME, &sid),
+			"Service get_by_name should return 0 on valid inputs");
+	TEST_ASSERT_EQUAL(service_id_as_expected, sid,
+			"Service get_by_name should equal expected id");
 
 	unregister_all();
 
 	/* ensure after unregister, get_by_name returns NULL */
-	TEST_ASSERT_EQUAL(0, rte_service_get_by_name(DUMMY_SERVICE_NAME),
-			"get by name should return NULL after unregister");
+	TEST_ASSERT_EQUAL(-ENODEV,
+			rte_service_get_by_name(DUMMY_SERVICE_NAME, &sid),
+			"get by name should return -ENODEV after unregister");
 
 	return TEST_SUCCESS;
 }
@@ -221,12 +203,12 @@ service_probe_capability(void)
 	service.callback = dummy_cb;
 	snprintf(service.name, sizeof(service.name), DUMMY_SERVICE_NAME);
 	service.capabilities |= RTE_SERVICE_CAP_MT_SAFE;
-	TEST_ASSERT_EQUAL(0, rte_service_register(&service),
+	TEST_ASSERT_EQUAL(0, rte_service_component_register(&service, NULL),
 			"Register of MT SAFE service failed");
 
 	/* verify flag is enabled */
-	struct rte_service_spec *s = rte_service_get_by_id(0);
-	int32_t mt = rte_service_probe_capability(s, RTE_SERVICE_CAP_MT_SAFE);
+	const uint32_t sid = 0;
+	int32_t mt = rte_service_probe_capability(sid, RTE_SERVICE_CAP_MT_SAFE);
 	TEST_ASSERT_EQUAL(1, mt, "MT SAFE capability flag not set.");
 
 
@@ -235,12 +217,11 @@ service_probe_capability(void)
 	memset(&service, 0, sizeof(struct rte_service_spec));
 	service.callback = dummy_cb;
 	snprintf(service.name, sizeof(service.name), DUMMY_SERVICE_NAME);
-	TEST_ASSERT_EQUAL(0, rte_service_register(&service),
+	TEST_ASSERT_EQUAL(0, rte_service_component_register(&service, NULL),
 			"Register of non-MT safe service failed");
 
 	/* verify flag is enabled */
-	s = rte_service_get_by_id(0);
-	mt = rte_service_probe_capability(s, RTE_SERVICE_CAP_MT_SAFE);
+	mt = rte_service_probe_capability(sid, RTE_SERVICE_CAP_MT_SAFE);
 	TEST_ASSERT_EQUAL(0, mt, "MT SAFE cap flag set on non MT SAFE service");
 
 	return unregister_all();
@@ -250,10 +231,168 @@ service_probe_capability(void)
 static int
 service_name(void)
 {
-	struct rte_service_spec *service = rte_service_get_by_id(0);
-
-	int equal = strcmp(service->name, DUMMY_SERVICE_NAME);
+	const char *name = rte_service_get_name(0);
+	int equal = strcmp(name, DUMMY_SERVICE_NAME);
 	TEST_ASSERT_EQUAL(0, equal, "Error: Service name not correct");
+
+	return unregister_all();
+}
+
+/* verify service attr get */
+static int
+service_attr_get(void)
+{
+	/* ensure all services unregistered so cycle counts are zero */
+	unregister_all();
+
+	struct rte_service_spec service;
+	memset(&service, 0, sizeof(struct rte_service_spec));
+	service.callback = dummy_cb;
+	snprintf(service.name, sizeof(service.name), DUMMY_SERVICE_NAME);
+	service.capabilities |= RTE_SERVICE_CAP_MT_SAFE;
+	uint32_t id;
+	TEST_ASSERT_EQUAL(0, rte_service_component_register(&service, &id),
+			"Register of  service failed");
+	rte_service_component_runstate_set(id, 1);
+	TEST_ASSERT_EQUAL(0, rte_service_runstate_set(id, 1),
+			"Error: Service start returned non-zero");
+	rte_service_set_stats_enable(id, 1);
+
+	uint32_t attr_id = UINT32_MAX;
+	uint32_t attr_value = 0xdead;
+	/* check error return values */
+	TEST_ASSERT_EQUAL(-EINVAL, rte_service_attr_get(id, attr_id,
+							&attr_value),
+			"Invalid attr_id didn't return -EINVAL");
+
+	attr_id = RTE_SERVICE_ATTR_CYCLES;
+	TEST_ASSERT_EQUAL(-EINVAL, rte_service_attr_get(UINT32_MAX, attr_id,
+							&attr_value),
+			"Invalid service id didn't return -EINVAL");
+
+	TEST_ASSERT_EQUAL(-EINVAL, rte_service_attr_get(id, attr_id, NULL),
+			"Invalid attr_value pointer id didn't return -EINVAL");
+
+	/* check correct (zero) return value and correct value (zero) */
+	TEST_ASSERT_EQUAL(0, rte_service_attr_get(id, attr_id, &attr_value),
+			"Valid attr_get() call didn't return success");
+	TEST_ASSERT_EQUAL(0, attr_value,
+			"attr_get() call didn't set correct cycles (zero)");
+	/* check correct call count */
+	const int attr_calls = RTE_SERVICE_ATTR_CALL_COUNT;
+	TEST_ASSERT_EQUAL(0, rte_service_attr_get(id, attr_calls, &attr_value),
+			"Valid attr_get() call didn't return success");
+	TEST_ASSERT_EQUAL(0, attr_value,
+			"attr_get() call didn't get call count (zero)");
+
+	/* Call service to increment cycle count */
+	TEST_ASSERT_EQUAL(0, rte_service_lcore_add(slcore_id),
+			"Service core add did not return zero");
+	TEST_ASSERT_EQUAL(0, rte_service_map_lcore_set(id, slcore_id, 1),
+			"Enabling valid service and core failed");
+	TEST_ASSERT_EQUAL(0, rte_service_lcore_start(slcore_id),
+			"Starting service core failed");
+
+	/* wait for the service lcore to run */
+	rte_delay_ms(200);
+
+	TEST_ASSERT_EQUAL(0, rte_service_attr_get(id, attr_id, &attr_value),
+			"Valid attr_get() call didn't return success");
+	int cycles_gt_zero = attr_value > 0;
+	TEST_ASSERT_EQUAL(1, cycles_gt_zero,
+			"attr_get() failed to get cycles (expected > zero)");
+
+	rte_service_lcore_stop(slcore_id);
+
+	TEST_ASSERT_EQUAL(0, rte_service_attr_get(id, attr_calls, &attr_value),
+			"Valid attr_get() call didn't return success");
+	TEST_ASSERT_EQUAL(1, (attr_value > 0),
+			"attr_get() call didn't get call count (zero)");
+
+	TEST_ASSERT_EQUAL(0, rte_service_attr_reset_all(id),
+			"Valid attr_reset_all() return success");
+
+	TEST_ASSERT_EQUAL(0, rte_service_attr_get(id, attr_id, &attr_value),
+			"Valid attr_get() call didn't return success");
+	TEST_ASSERT_EQUAL(0, attr_value,
+			"attr_get() call didn't set correct cycles (zero)");
+	/* ensure call count > zero */
+	TEST_ASSERT_EQUAL(0, rte_service_attr_get(id, attr_calls, &attr_value),
+			"Valid attr_get() call didn't return success");
+	TEST_ASSERT_EQUAL(0, (attr_value > 0),
+			"attr_get() call didn't get call count (zero)");
+
+	return unregister_all();
+}
+
+/* verify service lcore attr get */
+static int
+service_lcore_attr_get(void)
+{
+	/* ensure all services unregistered so cycle counts are zero */
+	unregister_all();
+
+	struct rte_service_spec service;
+	memset(&service, 0, sizeof(struct rte_service_spec));
+	service.callback = dummy_cb;
+	snprintf(service.name, sizeof(service.name), DUMMY_SERVICE_NAME);
+	service.capabilities |= RTE_SERVICE_CAP_MT_SAFE;
+	uint32_t id;
+	TEST_ASSERT_EQUAL(0, rte_service_component_register(&service, &id),
+			"Register of  service failed");
+	rte_service_component_runstate_set(id, 1);
+	TEST_ASSERT_EQUAL(0, rte_service_runstate_set(id, 1),
+			"Error: Service start returned non-zero");
+	rte_service_set_stats_enable(id, 1);
+
+	uint64_t lcore_attr_value = 0xdead;
+	uint32_t lcore_attr_id = UINT32_MAX;
+
+	/* check error return values */
+	TEST_ASSERT_EQUAL(-EINVAL, rte_service_lcore_attr_get(UINT32_MAX,
+			lcore_attr_id, &lcore_attr_value),
+			"Invalid lcore_id didn't return -EINVAL");
+	TEST_ASSERT_EQUAL(-ENOTSUP, rte_service_lcore_attr_get(rte_lcore_id(),
+			lcore_attr_id, &lcore_attr_value),
+			"Non-service core didn't return -ENOTSUP");
+
+	/* Start service core to increment loop count */
+	TEST_ASSERT_EQUAL(0, rte_service_lcore_add(slcore_id),
+			"Service core add did not return zero");
+	TEST_ASSERT_EQUAL(0, rte_service_map_lcore_set(id, slcore_id, 1),
+			"Enabling valid service and core failed");
+	TEST_ASSERT_EQUAL(0, rte_service_lcore_start(slcore_id),
+			"Starting service core failed");
+
+	/* wait for the service lcore to run */
+	rte_delay_ms(200);
+
+	lcore_attr_id = RTE_SERVICE_LCORE_ATTR_LOOPS;
+	TEST_ASSERT_EQUAL(0, rte_service_lcore_attr_get(slcore_id,
+			lcore_attr_id, &lcore_attr_value),
+			"Valid lcore_attr_get() call didn't return success");
+	int loops_gt_zero = lcore_attr_value > 0;
+	TEST_ASSERT_EQUAL(1, loops_gt_zero,
+			"lcore_attr_get() failed to get loops "
+			"(expected > zero)");
+
+	lcore_attr_id++;  // invalid lcore attr id
+	TEST_ASSERT_EQUAL(-EINVAL, rte_service_lcore_attr_get(slcore_id,
+			lcore_attr_id, &lcore_attr_value),
+			"Invalid lcore attr didn't return -EINVAL");
+
+	rte_service_lcore_stop(slcore_id);
+
+	TEST_ASSERT_EQUAL(0, rte_service_lcore_attr_reset_all(slcore_id),
+			  "Valid lcore_attr_reset_all() didn't return success");
+
+	lcore_attr_id = RTE_SERVICE_LCORE_ATTR_LOOPS;
+	TEST_ASSERT_EQUAL(0, rte_service_lcore_attr_get(slcore_id,
+			lcore_attr_id, &lcore_attr_value),
+			"Valid lcore_attr_get() call didn't return success");
+	TEST_ASSERT_EQUAL(0, lcore_attr_value,
+			"lcore_attr_get() didn't get correct loop count "
+			"(zero)");
 
 	return unregister_all();
 }
@@ -262,11 +401,11 @@ service_name(void)
 static int
 service_dump(void)
 {
-	struct rte_service_spec *service = rte_service_get_by_id(0);
-	rte_service_set_stats_enable(service, 1);
-	rte_service_dump(stdout, service);
-	rte_service_set_stats_enable(service, 0);
-	rte_service_dump(stdout, service);
+	const uint32_t sid = 0;
+	rte_service_set_stats_enable(sid, 1);
+	rte_service_dump(stdout, 0);
+	rte_service_set_stats_enable(sid, 0);
+	rte_service_dump(stdout, 0);
 	return unregister_all();
 }
 
@@ -274,28 +413,28 @@ service_dump(void)
 static int
 service_start_stop(void)
 {
-	struct rte_service_spec *service = rte_service_get_by_id(0);
+	const uint32_t sid = 0;
 
-	/* is_running() returns if service is running and slcore is mapped */
+	/* runstate_get() returns if service is running and slcore is mapped */
 	TEST_ASSERT_EQUAL(0, rte_service_lcore_add(slcore_id),
 			"Service core add did not return zero");
-	int ret = rte_service_enable_on_lcore(service, slcore_id);
+	int ret = rte_service_map_lcore_set(sid, slcore_id, 1);
 	TEST_ASSERT_EQUAL(0, ret,
 			"Enabling service core, expected 0 got %d", ret);
 
-	TEST_ASSERT_EQUAL(0, rte_service_is_running(service),
+	TEST_ASSERT_EQUAL(0, rte_service_runstate_get(sid),
 			"Error: Service should be stopped");
 
-	TEST_ASSERT_EQUAL(0, rte_service_stop(service),
+	TEST_ASSERT_EQUAL(0, rte_service_runstate_set(sid, 0),
 			"Error: Service stopped returned non-zero");
 
-	TEST_ASSERT_EQUAL(0, rte_service_is_running(service),
+	TEST_ASSERT_EQUAL(0, rte_service_runstate_get(sid),
 			"Error: Service is running - should be stopped");
 
-	TEST_ASSERT_EQUAL(0, rte_service_start(service),
+	TEST_ASSERT_EQUAL(0, rte_service_runstate_set(sid, 1),
 			"Error: Service start returned non-zero");
 
-	TEST_ASSERT_EQUAL(1, rte_service_is_running(service),
+	TEST_ASSERT_EQUAL(1, rte_service_runstate_get(sid),
 			"Error: Service is not running");
 
 	return unregister_all();
@@ -314,12 +453,12 @@ service_remote_launch_func(void *arg)
 static int
 service_lcore_en_dis_able(void)
 {
-	struct rte_service_spec *s = rte_service_get_by_id(0);
+	const uint32_t sid = 0;
 
 	/* expected failure cases */
-	TEST_ASSERT_EQUAL(-EINVAL, rte_service_enable_on_lcore(s, 100000),
+	TEST_ASSERT_EQUAL(-EINVAL, rte_service_map_lcore_set(sid, 100000, 1),
 			"Enable on invalid core did not fail");
-	TEST_ASSERT_EQUAL(-EINVAL, rte_service_disable_on_lcore(s, 100000),
+	TEST_ASSERT_EQUAL(-EINVAL, rte_service_map_lcore_set(sid, 100000, 0),
 			"Disable on invalid core did not fail");
 
 	/* add service core to allow enabling */
@@ -327,19 +466,20 @@ service_lcore_en_dis_able(void)
 			"Add service core failed when not in use before");
 
 	/* valid enable */
-	TEST_ASSERT_EQUAL(0, rte_service_enable_on_lcore(s, slcore_id),
+	TEST_ASSERT_EQUAL(0, rte_service_map_lcore_set(sid, slcore_id, 1),
 			"Enabling valid service and core failed");
-	TEST_ASSERT_EQUAL(1, rte_service_get_enabled_on_lcore(s, slcore_id),
+	TEST_ASSERT_EQUAL(1, rte_service_map_lcore_get(sid, slcore_id),
 			"Enabled core returned not-enabled");
 
 	/* valid disable */
-	TEST_ASSERT_EQUAL(0, rte_service_disable_on_lcore(s, slcore_id),
+	TEST_ASSERT_EQUAL(0, rte_service_map_lcore_set(sid, slcore_id, 0),
 			"Disabling valid service and lcore failed");
-	TEST_ASSERT_EQUAL(0, rte_service_get_enabled_on_lcore(s, slcore_id),
+	TEST_ASSERT_EQUAL(0, rte_service_map_lcore_get(sid, slcore_id),
 			"Disabled core returned enabled");
 
 	/* call remote_launch to verify that app can launch ex-service lcore */
 	service_remote_launch_flag = 0;
+	rte_eal_wait_lcore(slcore_id);
 	int ret = rte_eal_remote_launch(service_remote_launch_func, NULL,
 					slcore_id);
 	TEST_ASSERT_EQUAL(0, ret, "Ex-service core remote launch failed.");
@@ -354,7 +494,7 @@ static int
 service_lcore_running_check(void)
 {
 	uint64_t tick = service_tick;
-	rte_delay_ms(SERVICE_DELAY * 10);
+	rte_delay_ms(SERVICE_DELAY * 100);
 	/* if (tick != service_tick) we know the lcore as polled the service */
 	return tick != service_tick;
 }
@@ -465,22 +605,42 @@ service_threaded_test(int mt_safe)
 	if (mt_safe) {
 		service.callback = dummy_mt_safe_cb;
 		service.capabilities |= RTE_SERVICE_CAP_MT_SAFE;
-	} else {
-		/* initialize to pass, see callback comment for details */
-		test_params[1] = 1;
+	} else
 		service.callback = dummy_mt_unsafe_cb;
-	}
 
-	TEST_ASSERT_EQUAL(0, rte_service_register(&service),
+	uint32_t id;
+	TEST_ASSERT_EQUAL(0, rte_service_component_register(&service, &id),
 			"Register of MT SAFE service failed");
 
-	struct rte_service_spec *s = rte_service_get_by_id(0);
-	TEST_ASSERT_EQUAL(0, rte_service_start(s),
+	const uint32_t sid = 0;
+	TEST_ASSERT_EQUAL(0, rte_service_runstate_set(sid, 1),
 			"Starting valid service failed");
-	TEST_ASSERT_EQUAL(0, rte_service_enable_on_lcore(s, slcore_1),
+	TEST_ASSERT_EQUAL(0, rte_service_map_lcore_set(sid, slcore_1, 1),
 			"Failed to enable lcore 1 on mt safe service");
-	TEST_ASSERT_EQUAL(0, rte_service_enable_on_lcore(s, slcore_2),
+	TEST_ASSERT_EQUAL(0, rte_service_map_lcore_set(sid, slcore_2, 1),
 			"Failed to enable lcore 2 on mt safe service");
+	rte_service_lcore_start(slcore_1);
+	rte_service_lcore_start(slcore_2);
+
+	/* wait for the worker threads to run */
+	rte_delay_ms(500);
+	rte_service_lcore_stop(slcore_1);
+	rte_service_lcore_stop(slcore_2);
+
+	TEST_ASSERT_EQUAL(0, test_params[1],
+			"Service run with component runstate = 0");
+
+	/* enable backend runstate: the service should run after this */
+	rte_service_component_runstate_set(id, 1);
+
+	/* initialize to pass, see callback comment for details */
+	if (!mt_safe)
+		test_params[1] = 1;
+
+	/* wait for lcores before start() */
+	rte_eal_wait_lcore(slcore_1);
+	rte_eal_wait_lcore(slcore_2);
+
 	rte_service_lcore_start(slcore_1);
 	rte_service_lcore_start(slcore_2);
 
@@ -491,10 +651,11 @@ service_threaded_test(int mt_safe)
 
 	TEST_ASSERT_EQUAL(1, test_params[1],
 			"MT Safe service not run by two cores concurrently");
-
-	TEST_ASSERT_EQUAL(0, rte_service_stop(s),
+	TEST_ASSERT_EQUAL(0, rte_service_runstate_set(sid, 0),
 			"Failed to stop MT Safe service");
 
+	rte_eal_wait_lcore(slcore_1);
+	rte_eal_wait_lcore(slcore_2);
 	unregister_all();
 
 	/* return the value of the callback pass_test variable to caller */
@@ -525,15 +686,123 @@ service_mt_unsafe_poll(void)
 	return TEST_SUCCESS;
 }
 
+static int32_t
+delay_as_a_mt_safe_service(void *args)
+{
+	RTE_SET_USED(args);
+	uint32_t *params = args;
+
+	/* retrieve done flag and atomic lock to inc/dec */
+	uint32_t *done = &params[0];
+	rte_atomic32_t *lock = (rte_atomic32_t *)&params[1];
+
+	while (!*done) {
+		rte_atomic32_inc(lock);
+		rte_delay_us(500);
+		if (rte_atomic32_read(lock) > 1)
+			/* pass: second core has simultaneously incremented */
+			*done = 1;
+		rte_atomic32_dec(lock);
+	}
+
+	return 0;
+}
+
+static int32_t
+delay_as_a_service(void *args)
+{
+	uint32_t *done = (uint32_t *)args;
+	while (!*done)
+		rte_delay_ms(5);
+	return 0;
+}
+
+static int
+service_run_on_app_core_func(void *arg)
+{
+	uint32_t *delay_service_id = (uint32_t *)arg;
+	return rte_service_run_iter_on_app_lcore(*delay_service_id, 1);
+}
+
+static int
+service_app_lcore_poll_impl(const int mt_safe)
+{
+	uint32_t params[2] = {0};
+
+	struct rte_service_spec service;
+	memset(&service, 0, sizeof(struct rte_service_spec));
+	snprintf(service.name, sizeof(service.name), MT_SAFE_SERVICE_NAME);
+	if (mt_safe) {
+		service.callback = delay_as_a_mt_safe_service;
+		service.callback_userdata = params;
+		service.capabilities |= RTE_SERVICE_CAP_MT_SAFE;
+	} else {
+		service.callback = delay_as_a_service;
+		service.callback_userdata = &params;
+	}
+
+	uint32_t id;
+	TEST_ASSERT_EQUAL(0, rte_service_component_register(&service, &id),
+			"Register of app lcore delay service failed");
+
+	rte_service_component_runstate_set(id, 1);
+	rte_service_runstate_set(id, 1);
+
+	uint32_t app_core2 = rte_get_next_lcore(slcore_id, 1, 1);
+	rte_eal_wait_lcore(app_core2);
+	int app_core2_ret = rte_eal_remote_launch(service_run_on_app_core_func,
+						  &id, app_core2);
+
+	rte_delay_ms(100);
+
+	int app_core1_ret = service_run_on_app_core_func(&id);
+
+	/* flag done, then wait for the spawned 2nd core to return */
+	params[0] = 1;
+	rte_eal_mp_wait_lcore();
+
+	/* core two gets launched first - and should hold the service lock */
+	TEST_ASSERT_EQUAL(0, app_core2_ret,
+			"App core2 : run service didn't return zero");
+
+	if (mt_safe) {
+		/* mt safe should have both cores return 0 for success */
+		TEST_ASSERT_EQUAL(0, app_core1_ret,
+				"MT Safe: App core1 didn't return 0");
+	} else {
+		/* core one attempts to run later - should be blocked */
+		TEST_ASSERT_EQUAL(-EBUSY, app_core1_ret,
+				"MT Unsafe: App core1 didn't return -EBUSY");
+	}
+
+	unregister_all();
+
+	return TEST_SUCCESS;
+}
+
+static int
+service_app_lcore_mt_safe(void)
+{
+	const int mt_safe = 1;
+	return service_app_lcore_poll_impl(mt_safe);
+}
+
+static int
+service_app_lcore_mt_unsafe(void)
+{
+	const int mt_safe = 0;
+	return service_app_lcore_poll_impl(mt_safe);
+}
+
 /* start and stop a service core - ensuring it goes back to sleep */
 static int
 service_lcore_start_stop(void)
 {
 	/* start service core and service, create mapping so tick() runs */
-	struct rte_service_spec *s = rte_service_get_by_id(0);
-	TEST_ASSERT_EQUAL(0, rte_service_start(s),
+	const uint32_t sid = 0;
+	TEST_ASSERT_EQUAL(0, rte_service_runstate_set(sid, 1),
 			"Starting valid service failed");
-	TEST_ASSERT_EQUAL(-EINVAL, rte_service_enable_on_lcore(s, slcore_id),
+	TEST_ASSERT_EQUAL(-EINVAL, rte_service_map_lcore_set(sid, slcore_id, 1),
 			"Enabling valid service on non-service core must fail");
 
 	/* core start */
@@ -541,7 +810,7 @@ service_lcore_start_stop(void)
 			"Service core start without add should return EINVAL");
 	TEST_ASSERT_EQUAL(0, rte_service_lcore_add(slcore_id),
 			"Service core add did not return zero");
-	TEST_ASSERT_EQUAL(0, rte_service_enable_on_lcore(s, slcore_id),
+	TEST_ASSERT_EQUAL(0, rte_service_map_lcore_set(sid, slcore_id, 1),
 			"Enabling valid service on valid core failed");
 	TEST_ASSERT_EQUAL(0, rte_service_lcore_start(slcore_id),
 			"Service core start after add failed");
@@ -553,6 +822,10 @@ service_lcore_start_stop(void)
 			"Service core expected to poll service but it didn't");
 
 	/* core stop */
+	TEST_ASSERT_EQUAL(-EBUSY, rte_service_lcore_stop(slcore_id),
+			"Service core running a service should return -EBUSY");
+	TEST_ASSERT_EQUAL(0, rte_service_runstate_set(sid, 0),
+			"Stopping valid service failed");
 	TEST_ASSERT_EQUAL(-EINVAL, rte_service_lcore_stop(100000),
 			"Invalid Service core stop should return -EINVAL");
 	TEST_ASSERT_EQUAL(0, rte_service_lcore_stop(slcore_id),
@@ -570,6 +843,48 @@ service_lcore_start_stop(void)
 	return unregister_all();
 }
 
+/* stop a service and wait for it to become inactive */
+static int
+service_may_be_active(void)
+{
+	const uint32_t sid = 0;
+	int i;
+
+	/* expected failure cases */
+	TEST_ASSERT_EQUAL(-EINVAL, rte_service_may_be_active(10000),
+			"Invalid service may be active check did not fail");
+
+	/* start the service */
+	TEST_ASSERT_EQUAL(0, rte_service_runstate_set(sid, 1),
+			"Starting valid service failed");
+	TEST_ASSERT_EQUAL(0, rte_service_lcore_add(slcore_id),
+			"Add service core failed when not in use before");
+	TEST_ASSERT_EQUAL(0, rte_service_map_lcore_set(sid, slcore_id, 1),
+			"Enabling valid service on valid core failed");
+	TEST_ASSERT_EQUAL(0, rte_service_lcore_start(slcore_id),
+			"Service core start after add failed");
+
+	/* ensures core really is running the service function */
+	TEST_ASSERT_EQUAL(1, service_lcore_running_check(),
+			"Service core expected to poll service but it didn't");
+
+	/* stop the service */
+	TEST_ASSERT_EQUAL(0, rte_service_runstate_set(sid, 0),
+			"Error: Service stop returned non-zero");
+
+	/* give the service 100ms to stop running */
+	for (i = 0; i < 100; i++) {
+		if (!rte_service_may_be_active(sid))
+			break;
+		rte_delay_ms(SERVICE_DELAY);
+	}
+
+	TEST_ASSERT_EQUAL(0, rte_service_may_be_active(sid),
+			  "Error: Service not stopped after 100ms");
+
+	return unregister_all();
+}
+
 static struct unit_test_suite service_tests  = {
 	.suite_name = "service core test suite",
 	.setup = testsuite_setup,
@@ -579,6 +894,8 @@ static struct unit_test_suite service_tests  = {
 		TEST_CASE_ST(dummy_register, NULL, service_name),
 		TEST_CASE_ST(dummy_register, NULL, service_get_by_name),
 		TEST_CASE_ST(dummy_register, NULL, service_dump),
+		TEST_CASE_ST(dummy_register, NULL, service_attr_get),
+		TEST_CASE_ST(dummy_register, NULL, service_lcore_attr_get),
 		TEST_CASE_ST(dummy_register, NULL, service_probe_capability),
 		TEST_CASE_ST(dummy_register, NULL, service_start_stop),
 		TEST_CASE_ST(dummy_register, NULL, service_lcore_add_del),
@@ -586,6 +903,9 @@ static struct unit_test_suite service_tests  = {
 		TEST_CASE_ST(dummy_register, NULL, service_lcore_en_dis_able),
 		TEST_CASE_ST(dummy_register, NULL, service_mt_unsafe_poll),
 		TEST_CASE_ST(dummy_register, NULL, service_mt_safe_poll),
+		TEST_CASE_ST(dummy_register, NULL, service_app_lcore_mt_safe),
+		TEST_CASE_ST(dummy_register, NULL, service_app_lcore_mt_unsafe),
+		TEST_CASE_ST(dummy_register, NULL, service_may_be_active),
 		TEST_CASES_END() /**< NULL terminate unit test array */
 	}
 };

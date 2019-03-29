@@ -1,34 +1,8 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2015-2017 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *	 * Redistributions of source code must retain the above copyright
- *	   notice, this list of conditions and the following disclaimer.
- *	 * Redistributions in binary form must reproduce the above copyright
- *	   notice, this list of conditions and the following disclaimer in
- *	   the documentation and/or other materials provided with the
- *	   distribution.
- *	 * Neither the name of Intel Corporation nor the names of its
- *	   contributors may be used to endorse or promote products derived
- *	   from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2015-2017 Intel Corporation
  */
+
+#include <time.h>
 
 #include <rte_common.h>
 #include <rte_hexdump.h>
@@ -36,6 +10,7 @@
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
 #include <rte_pause.h>
+#include <rte_bus_vdev.h>
 
 #include <rte_crypto.h>
 #include <rte_cryptodev.h>
@@ -45,6 +20,8 @@
 #include <rte_cryptodev_scheduler.h>
 #include <rte_cryptodev_scheduler_operations.h>
 #endif
+
+#include <rte_lcore.h>
 
 #include "test.h"
 #include "test_cryptodev.h"
@@ -58,8 +35,11 @@
 #include "test_cryptodev_snow3g_test_vectors.h"
 #include "test_cryptodev_snow3g_hash_test_vectors.h"
 #include "test_cryptodev_zuc_test_vectors.h"
-#include "test_cryptodev_gcm_test_vectors.h"
+#include "test_cryptodev_aead_test_vectors.h"
 #include "test_cryptodev_hmac_test_vectors.h"
+
+#define VDEV_ARGS_SIZE 100
+#define MAX_NB_SESSIONS            4
 
 static int gbl_driver_id;
 
@@ -341,18 +321,81 @@ testsuite_setup(void)
 		}
 	}
 
+	/* Create a MVSAM device if required */
+	if (gbl_driver_id == rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_MVSAM_PMD))) {
+		nb_devs = rte_cryptodev_device_count_by_driver(
+				rte_cryptodev_driver_id_get(
+				RTE_STR(CRYPTODEV_NAME_MVSAM_PMD)));
+		if (nb_devs < 1) {
+			ret = rte_vdev_init(
+				RTE_STR(CRYPTODEV_NAME_MVSAM_PMD),
+				NULL);
+
+			TEST_ASSERT(ret == 0, "Failed to create "
+				"instance of pmd : %s",
+				RTE_STR(CRYPTODEV_NAME_MVSAM_PMD));
+		}
+	}
+
+	/* Create an CCP device if required */
+	if (gbl_driver_id == rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_CCP_PMD))) {
+		nb_devs = rte_cryptodev_device_count_by_driver(
+				rte_cryptodev_driver_id_get(
+				RTE_STR(CRYPTODEV_NAME_CCP_PMD)));
+		if (nb_devs < 1) {
+			ret = rte_vdev_init(
+				RTE_STR(CRYPTODEV_NAME_CCP_PMD),
+				NULL);
+
+			TEST_ASSERT(ret == 0, "Failed to create "
+				"instance of pmd : %s",
+				RTE_STR(CRYPTODEV_NAME_CCP_PMD));
+		}
+	}
+
 #ifdef RTE_LIBRTE_PMD_CRYPTO_SCHEDULER
+	char vdev_args[VDEV_ARGS_SIZE] = {""};
+	char temp_str[VDEV_ARGS_SIZE] = {"mode=multi-core,"
+		"ordering=enable,name=cryptodev_test_scheduler,corelist="};
+	uint16_t slave_core_count = 0;
+	uint16_t socket_id = 0;
+
 	if (gbl_driver_id == rte_cryptodev_driver_id_get(
 			RTE_STR(CRYPTODEV_NAME_SCHEDULER_PMD))) {
 
+		/* Identify the Slave Cores
+		 * Use 2 slave cores for the device args
+		 */
+		RTE_LCORE_FOREACH_SLAVE(i) {
+			if (slave_core_count > 1)
+				break;
+			snprintf(vdev_args, sizeof(vdev_args),
+					"%s%d", temp_str, i);
+			strcpy(temp_str, vdev_args);
+			strcat(temp_str, ";");
+			slave_core_count++;
+			socket_id = lcore_config[i].socket_id;
+		}
+		if (slave_core_count != 2) {
+			RTE_LOG(ERR, USER1,
+				"Cryptodev scheduler test require at least "
+				"two slave cores to run. "
+				"Please use the correct coremask.\n");
+			return TEST_FAILED;
+		}
+		strcpy(temp_str, vdev_args);
+		snprintf(vdev_args, sizeof(vdev_args), "%s,socket_id=%d",
+				temp_str, socket_id);
+		RTE_LOG(DEBUG, USER1, "vdev_args: %s\n", vdev_args);
 		nb_devs = rte_cryptodev_device_count_by_driver(
 				rte_cryptodev_driver_id_get(
 				RTE_STR(CRYPTODEV_NAME_SCHEDULER_PMD)));
 		if (nb_devs < 1) {
 			ret = rte_vdev_init(
 				RTE_STR(CRYPTODEV_NAME_SCHEDULER_PMD),
-				NULL);
-
+					vdev_args);
 			TEST_ASSERT(ret == 0,
 				"Failed to create instance %u of"
 				" pmd : %s",
@@ -386,15 +429,24 @@ testsuite_setup(void)
 	ts_params->conf.nb_queue_pairs = info.max_nb_queue_pairs;
 	ts_params->conf.socket_id = SOCKET_ID_ANY;
 
-	unsigned int session_size = rte_cryptodev_get_private_session_size(dev_id);
+	unsigned int session_size =
+		rte_cryptodev_sym_get_private_session_size(dev_id);
 
 	/*
 	 * Create mempool with maximum number of sessions * 2,
 	 * to include the session headers
 	 */
+	if (info.sym.max_nb_sessions != 0 &&
+			info.sym.max_nb_sessions < MAX_NB_SESSIONS) {
+		RTE_LOG(ERR, USER1, "Device does not support "
+				"at least %u sessions\n",
+				MAX_NB_SESSIONS);
+		return TEST_FAILED;
+	}
+
 	ts_params->session_mpool = rte_mempool_create(
 				"test_sess_mp",
-				info.sym.max_nb_sessions * 2,
+				MAX_NB_SESSIONS * 2,
 				session_size,
 				0, 0, NULL, NULL, NULL,
 				NULL, SOCKET_ID_ANY,
@@ -542,7 +594,7 @@ test_device_configure_invalid_dev_id(void)
 	dev_id = ts_params->valid_devs[ts_params->valid_dev_count - 1];
 
 	/* Stop the device in case it's started so it can be configured */
-	rte_cryptodev_stop(ts_params->valid_devs[dev_id]);
+	rte_cryptodev_stop(dev_id);
 
 	TEST_ASSERT_SUCCESS(rte_cryptodev_configure(dev_id, &ts_params->conf),
 			"Failed test for rte_cryptodev_configure: "
@@ -583,7 +635,7 @@ test_device_configure_invalid_queue_pair_ids(void)
 
 
 	/* valid - max value queue pairs */
-	ts_params->conf.nb_queue_pairs = MAX_NUM_QPS_PER_QAT_DEVICE;
+	ts_params->conf.nb_queue_pairs = orig_nb_qps;
 
 	TEST_ASSERT_SUCCESS(rte_cryptodev_configure(ts_params->valid_devs[0],
 			&ts_params->conf),
@@ -615,7 +667,7 @@ test_device_configure_invalid_queue_pair_ids(void)
 
 
 	/* invalid - max value + 1 queue pairs */
-	ts_params->conf.nb_queue_pairs = MAX_NUM_QPS_PER_QAT_DEVICE + 1;
+	ts_params->conf.nb_queue_pairs = orig_nb_qps + 1;
 
 	TEST_ASSERT_FAIL(rte_cryptodev_configure(ts_params->valid_devs[0],
 			&ts_params->conf),
@@ -767,7 +819,7 @@ test_queue_pair_descriptor_setup(void)
 	/* test invalid queue pair id */
 	qp_conf.nb_descriptors = DEFAULT_NUM_OPS_INFLIGHT;	/*valid */
 
-	qp_id = DEFAULT_NUM_QPS_PER_QAT_DEVICE;		/*invalid */
+	qp_id = ts_params->conf.nb_queue_pairs;		/*invalid */
 
 	TEST_ASSERT_FAIL(rte_cryptodev_queue_pair_setup(
 			ts_params->valid_devs[0],
@@ -1310,7 +1362,7 @@ test_AES_CBC_HMAC_SHA1_encrypt_digest(void)
 
 	/* Set crypto operation authentication parameters */
 	sym_op->auth.digest.data = ut_params->digest;
-	sym_op->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(
 			ut_params->ibuf, QUOTE_512_BYTES);
 
 	sym_op->auth.data.offset = 0;
@@ -1462,7 +1514,7 @@ test_AES_CBC_HMAC_SHA512_decrypt_perform(struct rte_cryptodev_sym_session *sess,
 	sym_op->m_src = ut_params->ibuf;
 
 	sym_op->auth.digest.data = ut_params->digest;
-	sym_op->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(
 			ut_params->ibuf, QUOTE_512_BYTES);
 
 	sym_op->auth.data.offset = 0;
@@ -1730,6 +1782,44 @@ test_AES_cipheronly_openssl_all(void)
 }
 
 static int
+test_AES_chain_ccp_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_CCP_PMD)),
+		BLKCIPHER_AES_CHAIN_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_AES_cipheronly_ccp_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_CCP_PMD)),
+		BLKCIPHER_AES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
 test_AES_chain_qat_all(void)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
@@ -1761,6 +1851,140 @@ test_AES_cipheronly_qat_all(void)
 		rte_cryptodev_driver_id_get(
 		RTE_STR(CRYPTODEV_NAME_QAT_SYM_PMD)),
 		BLKCIPHER_AES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_AES_cipheronly_virtio_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_VIRTIO_PMD)),
+		BLKCIPHER_AES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_AES_chain_caam_jr_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_CAAM_JR_PMD)),
+		BLKCIPHER_AES_CHAIN_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_AES_cipheronly_caam_jr_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_CAAM_JR_PMD)),
+		BLKCIPHER_AES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_authonly_caam_jr_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_CAAM_JR_PMD)),
+		BLKCIPHER_AUTHONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+
+static int
+test_AES_chain_dpaa_sec_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_DPAA_SEC_PMD)),
+		BLKCIPHER_AES_CHAIN_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_AES_cipheronly_dpaa_sec_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_DPAA_SEC_PMD)),
+		BLKCIPHER_AES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_authonly_dpaa_sec_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_DPAA_SEC_PMD)),
+		BLKCIPHER_AUTHONLY_TYPE);
 
 	TEST_ASSERT_EQUAL(status, 0, "Test failed");
 
@@ -1816,7 +2040,7 @@ test_authonly_dpaa2_sec_all(void)
 		ts_params->session_mpool,
 		ts_params->valid_devs[0],
 		rte_cryptodev_driver_id_get(
-		RTE_STR(RTE_CRYPTODEV_DPAA2_SEC_PMD)),
+		RTE_STR(CRYPTODEV_NAME_DPAA2_SEC_PMD)),
 		BLKCIPHER_AUTHONLY_TYPE);
 
 	TEST_ASSERT_EQUAL(status, 0, "Test failed");
@@ -1844,6 +2068,25 @@ test_authonly_openssl_all(void)
 }
 
 static int
+test_authonly_ccp_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_CCP_PMD)),
+		BLKCIPHER_AUTHONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
 test_AES_chain_armv8_all(void)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
@@ -1856,6 +2099,191 @@ test_AES_chain_armv8_all(void)
 		rte_cryptodev_driver_id_get(
 		RTE_STR(CRYPTODEV_NAME_ARMV8_PMD)),
 		BLKCIPHER_AES_CHAIN_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_AES_chain_mrvl_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_MVSAM_PMD)),
+		BLKCIPHER_AES_CHAIN_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_AES_cipheronly_mrvl_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_MVSAM_PMD)),
+		BLKCIPHER_AES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_authonly_mrvl_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_MVSAM_PMD)),
+		BLKCIPHER_AUTHONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_3DES_chain_mrvl_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_MVSAM_PMD)),
+		BLKCIPHER_3DES_CHAIN_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_3DES_cipheronly_mrvl_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_MVSAM_PMD)),
+		BLKCIPHER_3DES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_AES_chain_octeontx_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool, ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_OCTEONTX_SYM_PMD)),
+		BLKCIPHER_AES_CHAIN_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_AES_cipheronly_octeontx_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool, ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_OCTEONTX_SYM_PMD)),
+		BLKCIPHER_AES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_3DES_chain_octeontx_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool, ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_OCTEONTX_SYM_PMD)),
+		BLKCIPHER_3DES_CHAIN_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_3DES_cipheronly_octeontx_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool, ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_OCTEONTX_SYM_PMD)),
+		BLKCIPHER_3DES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_authonly_octeontx_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool, ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_OCTEONTX_SYM_PMD)),
+		BLKCIPHER_AUTHONLY_TYPE);
 
 	TEST_ASSERT_EQUAL(status, 0, "Test failed");
 
@@ -1877,7 +2305,7 @@ create_wireless_algo_hash_session(uint8_t dev_id,
 
 	memcpy(hash_key, key, key_len);
 
-	TEST_HEXDUMP(stdout, "key:", key, key_len);
+	debug_hexdump(stdout, "key:", key, key_len);
 
 	/* Setup Authentication Parameters */
 	ut_params->auth_xform.type = RTE_CRYPTO_SYM_XFORM_AUTH;
@@ -1924,7 +2352,7 @@ create_wireless_algo_cipher_session(uint8_t dev_id,
 	ut_params->cipher_xform.cipher.iv.offset = IV_OFFSET;
 	ut_params->cipher_xform.cipher.iv.length = iv_len;
 
-	TEST_HEXDUMP(stdout, "key:", key, key_len);
+	debug_hexdump(stdout, "key:", key, key_len);
 
 	/* Create Crypto session */
 	ut_params->sess = rte_cryptodev_sym_session_create(
@@ -2040,7 +2468,7 @@ create_wireless_algo_cipher_auth_session(uint8_t dev_id,
 	ut_params->cipher_xform.cipher.iv.offset = IV_OFFSET;
 	ut_params->cipher_xform.cipher.iv.length = cipher_iv_len;
 
-	TEST_HEXDUMP(stdout, "key:", key, key_len);
+	debug_hexdump(stdout, "key:", key, key_len);
 
 	/* Create Crypto session*/
 	ut_params->sess = rte_cryptodev_sym_session_create(
@@ -2099,7 +2527,7 @@ create_wireless_cipher_auth_session(uint8_t dev_id,
 	ut_params->cipher_xform.cipher.iv.length = cipher_iv_len;
 
 
-	TEST_HEXDUMP(stdout, "key:", key, key_len);
+	debug_hexdump(stdout, "key:", key, key_len);
 
 	/* Create Crypto session*/
 	ut_params->sess = rte_cryptodev_sym_session_create(
@@ -2161,7 +2589,7 @@ create_wireless_algo_auth_cipher_session(uint8_t dev_id,
 	ut_params->cipher_xform.cipher.iv.offset = IV_OFFSET;
 	ut_params->cipher_xform.cipher.iv.length = cipher_iv_len;
 
-	TEST_HEXDUMP(stdout, "key:", key, key_len);
+	debug_hexdump(stdout, "key:", key, key_len);
 
 	/* Create Crypto session*/
 	ut_params->sess = rte_cryptodev_sym_session_create(
@@ -2211,14 +2639,14 @@ create_wireless_algo_hash_operation(const uint8_t *auth_tag,
 	TEST_ASSERT_NOT_NULL(sym_op->auth.digest.data,
 				"no room to append auth tag");
 	ut_params->digest = sym_op->auth.digest.data;
-	sym_op->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(
 			ut_params->ibuf, data_pad_len);
 	if (op == RTE_CRYPTO_AUTH_OP_GENERATE)
 		memset(sym_op->auth.digest.data, 0, auth_tag_len);
 	else
 		rte_memcpy(sym_op->auth.digest.data, auth_tag, auth_tag_len);
 
-	TEST_HEXDUMP(stdout, "digest:",
+	debug_hexdump(stdout, "digest:",
 		sym_op->auth.digest.data,
 		auth_tag_len);
 
@@ -2267,14 +2695,14 @@ create_wireless_cipher_hash_operation(const struct wireless_test_data *tdata,
 	TEST_ASSERT_NOT_NULL(sym_op->auth.digest.data,
 			"no room to append auth tag");
 	ut_params->digest = sym_op->auth.digest.data;
-	sym_op->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(
 			ut_params->ibuf, data_pad_len);
 	if (op == RTE_CRYPTO_AUTH_OP_GENERATE)
 		memset(sym_op->auth.digest.data, 0, auth_tag_len);
 	else
 		rte_memcpy(sym_op->auth.digest.data, auth_tag, auth_tag_len);
 
-	TEST_HEXDUMP(stdout, "digest:",
+	debug_hexdump(stdout, "digest:",
 		sym_op->auth.digest.data,
 		auth_tag_len);
 
@@ -2334,14 +2762,14 @@ create_wireless_algo_cipher_hash_operation(const uint8_t *auth_tag,
 	TEST_ASSERT_NOT_NULL(sym_op->auth.digest.data,
 			"no room to append auth tag");
 	ut_params->digest = sym_op->auth.digest.data;
-	sym_op->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(
 			ut_params->ibuf, data_pad_len);
 	if (op == RTE_CRYPTO_AUTH_OP_GENERATE)
 		memset(sym_op->auth.digest.data, 0, auth_tag_len);
 	else
 		rte_memcpy(sym_op->auth.digest.data, auth_tag, auth_tag_len);
 
-	TEST_HEXDUMP(stdout, "digest:",
+	debug_hexdump(stdout, "digest:",
 		sym_op->auth.digest.data,
 		auth_tag_len);
 
@@ -2392,12 +2820,12 @@ create_wireless_algo_auth_cipher_operation(unsigned int auth_tag_len,
 	TEST_ASSERT_NOT_NULL(sym_op->auth.digest.data,
 			"no room to append auth tag");
 
-	sym_op->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(
 			ut_params->ibuf, data_pad_len);
 
 	memset(sym_op->auth.digest.data, 0, auth_tag_len);
 
-	TEST_HEXDUMP(stdout, "digest:",
+	debug_hexdump(stdout, "digest:",
 			sym_op->auth.digest.data,
 			auth_tag_len);
 
@@ -2830,7 +3258,7 @@ test_kasumi_encryption(const struct kasumi_test_data *tdata)
 				plaintext_pad_len);
 	memcpy(plaintext, tdata->plaintext.data, plaintext_len);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, plaintext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, plaintext_len);
 
 	/* Create KASUMI operation */
 	retval = create_wireless_algo_cipher_operation(tdata->cipher_iv.data,
@@ -2850,7 +3278,7 @@ test_kasumi_encryption(const struct kasumi_test_data *tdata)
 	else
 		ciphertext = plaintext + (tdata->validCipherOffsetInBits.len >> 3);
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, plaintext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, plaintext_len);
 
 	const uint8_t *reference_ciphertext = tdata->ciphertext.data +
 				(tdata->validCipherOffsetInBits.len >> 3);
@@ -2880,8 +3308,11 @@ test_kasumi_encryption_sgl(const struct kasumi_test_data *tdata)
 	struct rte_cryptodev_info dev_info;
 
 	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
-	if (!(dev_info.feature_flags & RTE_CRYPTODEV_FF_MBUF_SCATTER_GATHER)) {
-		printf("Device doesn't support scatter-gather. "
+
+	uint64_t feat_flags = dev_info.feature_flags;
+
+	if (!(feat_flags & RTE_CRYPTODEV_FF_IN_PLACE_SGL)) {
+		printf("Device doesn't support in-place scatter-gather. "
 				"Test Skipped.\n");
 		return 0;
 	}
@@ -2930,7 +3361,7 @@ test_kasumi_encryption_sgl(const struct kasumi_test_data *tdata)
 				plaintext_len, buffer);
 
 	/* Validate obuf */
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, plaintext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, plaintext_len);
 
 	const uint8_t *reference_ciphertext = tdata->ciphertext.data +
 				(tdata->validCipherOffsetInBits.len >> 3);
@@ -2979,7 +3410,7 @@ test_kasumi_encryption_oop(const struct kasumi_test_data *tdata)
 	rte_pktmbuf_append(ut_params->obuf, plaintext_pad_len);
 	memcpy(plaintext, tdata->plaintext.data, plaintext_len);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, plaintext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, plaintext_len);
 
 	/* Create KASUMI operation */
 	retval = create_wireless_algo_cipher_operation_oop(tdata->cipher_iv.data,
@@ -2999,7 +3430,7 @@ test_kasumi_encryption_oop(const struct kasumi_test_data *tdata)
 	else
 		ciphertext = plaintext + (tdata->validCipherOffsetInBits.len >> 3);
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, plaintext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, plaintext_len);
 
 	const uint8_t *reference_ciphertext = tdata->ciphertext.data +
 				(tdata->validCipherOffsetInBits.len >> 3);
@@ -3028,8 +3459,11 @@ test_kasumi_encryption_oop_sgl(const struct kasumi_test_data *tdata)
 	struct rte_cryptodev_info dev_info;
 
 	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
-	if (!(dev_info.feature_flags & RTE_CRYPTODEV_FF_MBUF_SCATTER_GATHER)) {
-		printf("Device doesn't support scatter-gather. "
+
+	uint64_t feat_flags = dev_info.feature_flags;
+	if (!(feat_flags & RTE_CRYPTODEV_FF_OOP_SGL_IN_SGL_OUT)) {
+		printf("Device doesn't support out-of-place scatter-gather "
+				"in both input and output mbufs. "
 				"Test Skipped.\n");
 		return 0;
 	}
@@ -3126,7 +3560,7 @@ test_kasumi_decryption_oop(const struct kasumi_test_data *tdata)
 	rte_pktmbuf_append(ut_params->obuf, ciphertext_pad_len);
 	memcpy(ciphertext, tdata->ciphertext.data, ciphertext_len);
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, ciphertext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, ciphertext_len);
 
 	/* Create KASUMI operation */
 	retval = create_wireless_algo_cipher_operation_oop(tdata->cipher_iv.data,
@@ -3146,7 +3580,7 @@ test_kasumi_decryption_oop(const struct kasumi_test_data *tdata)
 	else
 		plaintext = ciphertext + (tdata->validCipherOffsetInBits.len >> 3);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, ciphertext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, ciphertext_len);
 
 	const uint8_t *reference_plaintext = tdata->plaintext.data +
 				(tdata->validCipherOffsetInBits.len >> 3);
@@ -3193,7 +3627,7 @@ test_kasumi_decryption(const struct kasumi_test_data *tdata)
 				ciphertext_pad_len);
 	memcpy(ciphertext, tdata->ciphertext.data, ciphertext_len);
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, ciphertext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, ciphertext_len);
 
 	/* Create KASUMI operation */
 	retval = create_wireless_algo_cipher_operation(tdata->cipher_iv.data,
@@ -3213,7 +3647,7 @@ test_kasumi_decryption(const struct kasumi_test_data *tdata)
 	else
 		plaintext = ciphertext + (tdata->validCipherOffsetInBits.len >> 3);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, ciphertext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, ciphertext_len);
 
 	const uint8_t *reference_plaintext = tdata->plaintext.data +
 				(tdata->validCipherOffsetInBits.len >> 3);
@@ -3260,7 +3694,7 @@ test_snow3g_encryption(const struct snow3g_test_data *tdata)
 				plaintext_pad_len);
 	memcpy(plaintext, tdata->plaintext.data, plaintext_len);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, plaintext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, plaintext_len);
 
 	/* Create SNOW 3G operation */
 	retval = create_wireless_algo_cipher_operation(tdata->cipher_iv.data,
@@ -3280,7 +3714,7 @@ test_snow3g_encryption(const struct snow3g_test_data *tdata)
 	else
 		ciphertext = plaintext;
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, plaintext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, plaintext_len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(
@@ -3333,7 +3767,7 @@ test_snow3g_encryption_oop(const struct snow3g_test_data *tdata)
 	rte_pktmbuf_append(ut_params->obuf, plaintext_pad_len);
 	memcpy(plaintext, tdata->plaintext.data, plaintext_len);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, plaintext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, plaintext_len);
 
 	/* Create SNOW 3G operation */
 	retval = create_wireless_algo_cipher_operation_oop(tdata->cipher_iv.data,
@@ -3353,7 +3787,7 @@ test_snow3g_encryption_oop(const struct snow3g_test_data *tdata)
 	else
 		ciphertext = plaintext;
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, plaintext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, plaintext_len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(
@@ -3379,8 +3813,12 @@ test_snow3g_encryption_oop_sgl(const struct snow3g_test_data *tdata)
 	struct rte_cryptodev_info dev_info;
 
 	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
-	if (!(dev_info.feature_flags & RTE_CRYPTODEV_FF_MBUF_SCATTER_GATHER)) {
-		printf("Device doesn't support scatter-gather. "
+
+	uint64_t feat_flags = dev_info.feature_flags;
+
+	if (!(feat_flags & RTE_CRYPTODEV_FF_OOP_SGL_IN_SGL_OUT)) {
+		printf("Device doesn't support out-of-place scatter-gather "
+				"in both input and output mbufs. "
 				"Test Skipped.\n");
 		return 0;
 	}
@@ -3431,7 +3869,7 @@ test_snow3g_encryption_oop_sgl(const struct snow3g_test_data *tdata)
 		ciphertext = rte_pktmbuf_read(ut_params->ibuf, 0,
 				plaintext_len, buffer);
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, plaintext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, plaintext_len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(
@@ -3589,7 +4027,7 @@ static int test_snow3g_decryption(const struct snow3g_test_data *tdata)
 				ciphertext_pad_len);
 	memcpy(ciphertext, tdata->ciphertext.data, ciphertext_len);
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, ciphertext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, ciphertext_len);
 
 	/* Create SNOW 3G operation */
 	retval = create_wireless_algo_cipher_operation(tdata->cipher_iv.data,
@@ -3608,7 +4046,7 @@ static int test_snow3g_decryption(const struct snow3g_test_data *tdata)
 	else
 		plaintext = ciphertext;
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, ciphertext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, ciphertext_len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(plaintext,
@@ -3662,7 +4100,7 @@ static int test_snow3g_decryption_oop(const struct snow3g_test_data *tdata)
 	rte_pktmbuf_append(ut_params->obuf, ciphertext_pad_len);
 	memcpy(ciphertext, tdata->ciphertext.data, ciphertext_len);
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, ciphertext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, ciphertext_len);
 
 	/* Create SNOW 3G operation */
 	retval = create_wireless_algo_cipher_operation_oop(tdata->cipher_iv.data,
@@ -3681,7 +4119,7 @@ static int test_snow3g_decryption_oop(const struct snow3g_test_data *tdata)
 	else
 		plaintext = ciphertext;
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, ciphertext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, ciphertext_len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(plaintext,
@@ -3741,7 +4179,7 @@ test_zuc_cipher_auth(const struct wireless_test_data *tdata)
 				plaintext_pad_len);
 	memcpy(plaintext, tdata->plaintext.data, plaintext_len);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, plaintext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, plaintext_len);
 
 	/* Create ZUC operation */
 	retval = create_zuc_cipher_hash_generate_operation(tdata);
@@ -3757,7 +4195,7 @@ test_zuc_cipher_auth(const struct wireless_test_data *tdata)
 	else
 		ciphertext = plaintext;
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, plaintext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, plaintext_len);
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(
 			ciphertext,
@@ -3814,7 +4252,7 @@ test_snow3g_cipher_auth(const struct snow3g_test_data *tdata)
 				plaintext_pad_len);
 	memcpy(plaintext, tdata->plaintext.data, plaintext_len);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, plaintext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, plaintext_len);
 
 	/* Create SNOW 3G operation */
 	retval = create_wireless_algo_cipher_hash_operation(tdata->digest.data,
@@ -3839,7 +4277,7 @@ test_snow3g_cipher_auth(const struct snow3g_test_data *tdata)
 	else
 		ciphertext = plaintext;
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, plaintext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, plaintext_len);
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(
 			ciphertext,
@@ -3896,7 +4334,7 @@ test_snow3g_auth_cipher(const struct snow3g_test_data *tdata)
 				plaintext_pad_len);
 	memcpy(plaintext, tdata->plaintext.data, plaintext_len);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, plaintext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, plaintext_len);
 
 	/* Create SNOW 3G operation */
 	retval = create_wireless_algo_auth_cipher_operation(
@@ -3923,7 +4361,7 @@ test_snow3g_auth_cipher(const struct snow3g_test_data *tdata)
 
 	ut_params->digest = rte_pktmbuf_mtod(ut_params->obuf, uint8_t *)
 			+ plaintext_pad_len;
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, plaintext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, plaintext_len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(
@@ -3979,7 +4417,7 @@ test_kasumi_auth_cipher(const struct kasumi_test_data *tdata)
 				plaintext_pad_len);
 	memcpy(plaintext, tdata->plaintext.data, plaintext_len);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, plaintext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, plaintext_len);
 
 	/* Create KASUMI operation */
 	retval = create_wireless_algo_auth_cipher_operation(tdata->digest.len,
@@ -4065,7 +4503,7 @@ test_kasumi_cipher_auth(const struct kasumi_test_data *tdata)
 				plaintext_pad_len);
 	memcpy(plaintext, tdata->plaintext.data, plaintext_len);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, plaintext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, plaintext_len);
 
 	/* Create KASUMI operation */
 	retval = create_wireless_algo_cipher_hash_operation(tdata->digest.data,
@@ -4157,7 +4595,7 @@ test_zuc_encryption(const struct wireless_test_data *tdata)
 				plaintext_pad_len);
 	memcpy(plaintext, tdata->plaintext.data, plaintext_len);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, plaintext_len);
+	debug_hexdump(stdout, "plaintext:", plaintext, plaintext_len);
 
 	/* Create ZUC operation */
 	retval = create_wireless_algo_cipher_operation(tdata->cipher_iv.data,
@@ -4177,7 +4615,7 @@ test_zuc_encryption(const struct wireless_test_data *tdata)
 	else
 		ciphertext = plaintext;
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, plaintext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, plaintext_len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(
@@ -4213,10 +4651,13 @@ test_zuc_encryption_sgl(const struct wireless_test_data *tdata)
 		return -ENOTSUP;
 
 	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
-	if (!(dev_info.feature_flags & RTE_CRYPTODEV_FF_MBUF_SCATTER_GATHER)) {
-		printf("Device doesn't support scatter-gather. "
+
+	uint64_t feat_flags = dev_info.feature_flags;
+
+	if (!(feat_flags & RTE_CRYPTODEV_FF_IN_PLACE_SGL)) {
+		printf("Device doesn't support in-place scatter-gather. "
 				"Test Skipped.\n");
-		return -ENOTSUP;
+		return 0;
 	}
 
 	plaintext_len = ceil_byte_length(tdata->plaintext.len);
@@ -4264,7 +4705,7 @@ test_zuc_encryption_sgl(const struct wireless_test_data *tdata)
 			0, plaintext_len, ciphertext_buffer);
 
 	/* Validate obuf */
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, plaintext_len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, plaintext_len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL_BIT(
@@ -4672,6 +5113,25 @@ test_DES_cipheronly_qat_all(void)
 }
 
 static int
+test_DES_cipheronly_openssl_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_OPENSSL_PMD)),
+		BLKCIPHER_DES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
 test_DES_docsis_openssl_all(void)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
@@ -4684,6 +5144,138 @@ test_DES_docsis_openssl_all(void)
 		rte_cryptodev_driver_id_get(
 		RTE_STR(CRYPTODEV_NAME_OPENSSL_PMD)),
 		BLKCIPHER_DES_DOCSIS_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_DES_cipheronly_mb_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_AESNI_MB_PMD)),
+		BLKCIPHER_DES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+static int
+test_3DES_cipheronly_mb_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_AESNI_MB_PMD)),
+		BLKCIPHER_3DES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_DES_docsis_mb_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_AESNI_MB_PMD)),
+		BLKCIPHER_DES_DOCSIS_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_3DES_chain_caam_jr_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_CAAM_JR_PMD)),
+		BLKCIPHER_3DES_CHAIN_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_3DES_cipheronly_caam_jr_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_CAAM_JR_PMD)),
+		BLKCIPHER_3DES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_3DES_chain_dpaa_sec_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_DPAA_SEC_PMD)),
+		BLKCIPHER_3DES_CHAIN_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_3DES_cipheronly_dpaa_sec_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_DPAA_SEC_PMD)),
+		BLKCIPHER_3DES_CIPHERONLY_TYPE);
 
 	TEST_ASSERT_EQUAL(status, 0, "Test failed");
 
@@ -4721,6 +5313,44 @@ test_3DES_cipheronly_dpaa2_sec_all(void)
 		ts_params->valid_devs[0],
 		rte_cryptodev_driver_id_get(
 		RTE_STR(CRYPTODEV_NAME_DPAA2_SEC_PMD)),
+		BLKCIPHER_3DES_CIPHERONLY_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_3DES_chain_ccp_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_CCP_PMD)),
+		BLKCIPHER_3DES_CHAIN_TYPE);
+
+	TEST_ASSERT_EQUAL(status, 0, "Test failed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_3DES_cipheronly_ccp_all(void)
+{
+	struct crypto_testsuite_params *ts_params = &testsuite_params;
+	int status;
+
+	status = test_blockcipher_all_tests(ts_params->mbuf_pool,
+		ts_params->op_mpool,
+		ts_params->session_mpool,
+		ts_params->valid_devs[0],
+		rte_cryptodev_driver_id_get(
+		RTE_STR(CRYPTODEV_NAME_CCP_PMD)),
 		BLKCIPHER_3DES_CIPHERONLY_TYPE);
 
 	TEST_ASSERT_EQUAL(status, 0, "Test failed");
@@ -4785,10 +5415,11 @@ test_3DES_cipheronly_openssl_all(void)
 	return TEST_SUCCESS;
 }
 
-/* ***** AES-GCM Tests ***** */
+/* ***** AEAD algorithm Tests ***** */
 
 static int
-create_gcm_session(uint8_t dev_id, enum rte_crypto_aead_operation op,
+create_aead_session(uint8_t dev_id, enum rte_crypto_aead_algorithm algo,
+		enum rte_crypto_aead_operation op,
 		const uint8_t *key, const uint8_t key_len,
 		const uint16_t aad_len, const uint8_t auth_len,
 		uint8_t iv_len)
@@ -4803,7 +5434,7 @@ create_gcm_session(uint8_t dev_id, enum rte_crypto_aead_operation op,
 	/* Setup AEAD Parameters */
 	ut_params->aead_xform.type = RTE_CRYPTO_SYM_XFORM_AEAD;
 	ut_params->aead_xform.next = NULL;
-	ut_params->aead_xform.aead.algo = RTE_CRYPTO_AEAD_AES_GCM;
+	ut_params->aead_xform.aead.algo = algo;
 	ut_params->aead_xform.aead.op = op;
 	ut_params->aead_xform.aead.key.data = aead_key;
 	ut_params->aead_xform.aead.key.length = key_len;
@@ -4812,7 +5443,7 @@ create_gcm_session(uint8_t dev_id, enum rte_crypto_aead_operation op,
 	ut_params->aead_xform.aead.digest_length = auth_len;
 	ut_params->aead_xform.aead.aad_length = aad_len;
 
-	TEST_HEXDUMP(stdout, "key:", key, key_len);
+	debug_hexdump(stdout, "key:", key, key_len);
 
 	/* Create Crypto session*/
 	ut_params->sess = rte_cryptodev_sym_session_create(
@@ -4827,7 +5458,8 @@ create_gcm_session(uint8_t dev_id, enum rte_crypto_aead_operation op,
 }
 
 static int
-create_gcm_xforms(struct rte_crypto_op *op,
+create_aead_xform(struct rte_crypto_op *op,
+		enum rte_crypto_aead_algorithm algo,
 		enum rte_crypto_aead_operation aead_op,
 		uint8_t *key, const uint8_t key_len,
 		const uint8_t aad_len, const uint8_t auth_len,
@@ -4841,7 +5473,7 @@ create_gcm_xforms(struct rte_crypto_op *op,
 	/* Setup AEAD Parameters */
 	sym_op->xform->type = RTE_CRYPTO_SYM_XFORM_AEAD;
 	sym_op->xform->next = NULL;
-	sym_op->xform->aead.algo = RTE_CRYPTO_AEAD_AES_GCM;
+	sym_op->xform->aead.algo = algo;
 	sym_op->xform->aead.op = aead_op;
 	sym_op->xform->aead.key.data = key;
 	sym_op->xform->aead.key.length = key_len;
@@ -4850,14 +5482,14 @@ create_gcm_xforms(struct rte_crypto_op *op,
 	sym_op->xform->aead.digest_length = auth_len;
 	sym_op->xform->aead.aad_length = aad_len;
 
-	TEST_HEXDUMP(stdout, "key:", key, key_len);
+	debug_hexdump(stdout, "key:", key, key_len);
 
 	return 0;
 }
 
 static int
-create_gcm_operation(enum rte_crypto_aead_operation op,
-		const struct gcm_test_data *tdata)
+create_aead_operation(enum rte_crypto_aead_operation op,
+		const struct aead_test_data *tdata)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -4874,25 +5506,49 @@ create_gcm_operation(enum rte_crypto_aead_operation op,
 	struct rte_crypto_sym_op *sym_op = ut_params->op->sym;
 
 	/* Append aad data */
-	aad_pad_len = RTE_ALIGN_CEIL(tdata->aad.len, 16);
-	sym_op->aead.aad.data = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf,
-			aad_pad_len);
-	TEST_ASSERT_NOT_NULL(sym_op->aead.aad.data,
-			"no room to append aad");
+	if (tdata->algo == RTE_CRYPTO_AEAD_AES_CCM) {
+		aad_pad_len = RTE_ALIGN_CEIL(tdata->aad.len + 18, 16);
+		sym_op->aead.aad.data = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf,
+				aad_pad_len);
+		TEST_ASSERT_NOT_NULL(sym_op->aead.aad.data,
+				"no room to append aad");
 
-	sym_op->aead.aad.phys_addr =
-			rte_pktmbuf_mtophys(ut_params->ibuf);
-	memcpy(sym_op->aead.aad.data, tdata->aad.data, tdata->aad.len);
-	TEST_HEXDUMP(stdout, "aad:", sym_op->aead.aad.data,
-		tdata->aad.len);
+		sym_op->aead.aad.phys_addr =
+				rte_pktmbuf_iova(ut_params->ibuf);
+		/* Copy AAD 18 bytes after the AAD pointer, according to the API */
+		memcpy(sym_op->aead.aad.data + 18, tdata->aad.data, tdata->aad.len);
+		debug_hexdump(stdout, "aad:", sym_op->aead.aad.data,
+			tdata->aad.len);
 
-	/* Append IV at the end of the crypto operation*/
-	uint8_t *iv_ptr = rte_crypto_op_ctod_offset(ut_params->op,
-			uint8_t *, IV_OFFSET);
+		/* Append IV at the end of the crypto operation*/
+		uint8_t *iv_ptr = rte_crypto_op_ctod_offset(ut_params->op,
+				uint8_t *, IV_OFFSET);
 
-	rte_memcpy(iv_ptr, tdata->iv.data, tdata->iv.len);
-	TEST_HEXDUMP(stdout, "iv:", iv_ptr,
-		tdata->iv.len);
+		/* Copy IV 1 byte after the IV pointer, according to the API */
+		rte_memcpy(iv_ptr + 1, tdata->iv.data, tdata->iv.len);
+		debug_hexdump(stdout, "iv:", iv_ptr,
+			tdata->iv.len);
+	} else {
+		aad_pad_len = RTE_ALIGN_CEIL(tdata->aad.len, 16);
+		sym_op->aead.aad.data = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf,
+				aad_pad_len);
+		TEST_ASSERT_NOT_NULL(sym_op->aead.aad.data,
+				"no room to append aad");
+
+		sym_op->aead.aad.phys_addr =
+				rte_pktmbuf_iova(ut_params->ibuf);
+		memcpy(sym_op->aead.aad.data, tdata->aad.data, tdata->aad.len);
+		debug_hexdump(stdout, "aad:", sym_op->aead.aad.data,
+			tdata->aad.len);
+
+		/* Append IV at the end of the crypto operation*/
+		uint8_t *iv_ptr = rte_crypto_op_ctod_offset(ut_params->op,
+				uint8_t *, IV_OFFSET);
+
+		rte_memcpy(iv_ptr, tdata->iv.data, tdata->iv.len);
+		debug_hexdump(stdout, "iv:", iv_ptr,
+			tdata->iv.len);
+	}
 
 	/* Append plaintext/ciphertext */
 	if (op == RTE_CRYPTO_AEAD_OP_ENCRYPT) {
@@ -4902,7 +5558,7 @@ create_gcm_operation(enum rte_crypto_aead_operation op,
 		TEST_ASSERT_NOT_NULL(plaintext, "no room to append plaintext");
 
 		memcpy(plaintext, tdata->plaintext.data, tdata->plaintext.len);
-		TEST_HEXDUMP(stdout, "plaintext:", plaintext,
+		debug_hexdump(stdout, "plaintext:", plaintext,
 				tdata->plaintext.len);
 
 		if (ut_params->obuf) {
@@ -4924,7 +5580,7 @@ create_gcm_operation(enum rte_crypto_aead_operation op,
 
 		memcpy(ciphertext, tdata->ciphertext.data,
 				tdata->ciphertext.len);
-		TEST_HEXDUMP(stdout, "ciphertext:", ciphertext,
+		debug_hexdump(stdout, "ciphertext:", ciphertext,
 				tdata->ciphertext.len);
 
 		if (ut_params->obuf) {
@@ -4948,7 +5604,7 @@ create_gcm_operation(enum rte_crypto_aead_operation op,
 		TEST_ASSERT_NOT_NULL(sym_op->aead.digest.data,
 				"no room to append digest");
 		memset(sym_op->aead.digest.data, 0, tdata->auth_tag.len);
-		sym_op->aead.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+		sym_op->aead.digest.phys_addr = rte_pktmbuf_iova_offset(
 				ut_params->obuf ? ut_params->obuf :
 						ut_params->ibuf,
 						plaintext_pad_len +
@@ -4958,13 +5614,13 @@ create_gcm_operation(enum rte_crypto_aead_operation op,
 				ut_params->ibuf, tdata->auth_tag.len);
 		TEST_ASSERT_NOT_NULL(sym_op->aead.digest.data,
 				"no room to append digest");
-		sym_op->aead.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+		sym_op->aead.digest.phys_addr = rte_pktmbuf_iova_offset(
 				ut_params->ibuf,
 				plaintext_pad_len + aad_pad_len);
 
 		rte_memcpy(sym_op->aead.digest.data, tdata->auth_tag.data,
 			tdata->auth_tag.len);
-		TEST_HEXDUMP(stdout, "digest:",
+		debug_hexdump(stdout, "digest:",
 			sym_op->aead.digest.data,
 			tdata->auth_tag.len);
 	}
@@ -4976,7 +5632,7 @@ create_gcm_operation(enum rte_crypto_aead_operation op,
 }
 
 static int
-test_AES_GCM_authenticated_encryption(const struct gcm_test_data *tdata)
+test_authenticated_encryption(const struct aead_test_data *tdata)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -4986,8 +5642,9 @@ test_AES_GCM_authenticated_encryption(const struct gcm_test_data *tdata)
 	uint16_t plaintext_pad_len;
 	uint32_t i;
 
-	/* Create GCM session */
-	retval = create_gcm_session(ts_params->valid_devs[0],
+	/* Create AEAD session */
+	retval = create_aead_session(ts_params->valid_devs[0],
+			tdata->algo,
 			RTE_CRYPTO_AEAD_OP_ENCRYPT,
 			tdata->key.data, tdata->key.len,
 			tdata->aad.len, tdata->auth_tag.len,
@@ -4998,7 +5655,7 @@ test_AES_GCM_authenticated_encryption(const struct gcm_test_data *tdata)
 	if (tdata->aad.len > MBUF_SIZE) {
 		ut_params->ibuf = rte_pktmbuf_alloc(ts_params->large_mbuf_pool);
 		/* Populate full size of add data */
-		for (i = 32; i < GCM_MAX_AAD_LENGTH; i += 32)
+		for (i = 32; i < MAX_AAD_LENGTH; i += 32)
 			memcpy(&tdata->aad.data[i], &tdata->aad.data[0], 32);
 	} else
 		ut_params->ibuf = rte_pktmbuf_alloc(ts_params->mbuf_pool);
@@ -5007,8 +5664,8 @@ test_AES_GCM_authenticated_encryption(const struct gcm_test_data *tdata)
 	memset(rte_pktmbuf_mtod(ut_params->ibuf, uint8_t *), 0,
 			rte_pktmbuf_tailroom(ut_params->ibuf));
 
-	/* Create GCM operation */
-	retval = create_gcm_operation(RTE_CRYPTO_AEAD_OP_ENCRYPT, tdata);
+	/* Create AEAD operation */
+	retval = create_aead_operation(RTE_CRYPTO_AEAD_OP_ENCRYPT, tdata);
 	if (retval < 0)
 		return retval;
 
@@ -5037,21 +5694,21 @@ test_AES_GCM_authenticated_encryption(const struct gcm_test_data *tdata)
 		auth_tag = ciphertext + plaintext_pad_len;
 	}
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, tdata->ciphertext.len);
-	TEST_HEXDUMP(stdout, "auth tag:", auth_tag, tdata->auth_tag.len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, tdata->ciphertext.len);
+	debug_hexdump(stdout, "auth tag:", auth_tag, tdata->auth_tag.len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
 			ciphertext,
 			tdata->ciphertext.data,
 			tdata->ciphertext.len,
-			"GCM Ciphertext data not as expected");
+			"Ciphertext data not as expected");
 
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
 			auth_tag,
 			tdata->auth_tag.data,
 			tdata->auth_tag.len,
-			"GCM Generated auth tag not as expected");
+			"Generated auth tag not as expected");
 
 	return 0;
 
@@ -5060,143 +5717,143 @@ test_AES_GCM_authenticated_encryption(const struct gcm_test_data *tdata)
 static int
 test_AES_GCM_authenticated_encryption_test_case_1(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_1);
+	return test_authenticated_encryption(&gcm_test_case_1);
 }
 
 static int
 test_AES_GCM_authenticated_encryption_test_case_2(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_2);
+	return test_authenticated_encryption(&gcm_test_case_2);
 }
 
 static int
 test_AES_GCM_authenticated_encryption_test_case_3(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_3);
+	return test_authenticated_encryption(&gcm_test_case_3);
 }
 
 static int
 test_AES_GCM_authenticated_encryption_test_case_4(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_4);
+	return test_authenticated_encryption(&gcm_test_case_4);
 }
 
 static int
 test_AES_GCM_authenticated_encryption_test_case_5(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_5);
+	return test_authenticated_encryption(&gcm_test_case_5);
 }
 
 static int
 test_AES_GCM_authenticated_encryption_test_case_6(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_6);
+	return test_authenticated_encryption(&gcm_test_case_6);
 }
 
 static int
 test_AES_GCM_authenticated_encryption_test_case_7(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_7);
+	return test_authenticated_encryption(&gcm_test_case_7);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_192_1(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_192_1);
+	return test_authenticated_encryption(&gcm_test_case_192_1);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_192_2(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_192_2);
+	return test_authenticated_encryption(&gcm_test_case_192_2);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_192_3(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_192_3);
+	return test_authenticated_encryption(&gcm_test_case_192_3);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_192_4(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_192_4);
+	return test_authenticated_encryption(&gcm_test_case_192_4);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_192_5(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_192_5);
+	return test_authenticated_encryption(&gcm_test_case_192_5);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_192_6(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_192_6);
+	return test_authenticated_encryption(&gcm_test_case_192_6);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_192_7(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_192_7);
+	return test_authenticated_encryption(&gcm_test_case_192_7);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_256_1(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_256_1);
+	return test_authenticated_encryption(&gcm_test_case_256_1);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_256_2(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_256_2);
+	return test_authenticated_encryption(&gcm_test_case_256_2);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_256_3(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_256_3);
+	return test_authenticated_encryption(&gcm_test_case_256_3);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_256_4(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_256_4);
+	return test_authenticated_encryption(&gcm_test_case_256_4);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_256_5(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_256_5);
+	return test_authenticated_encryption(&gcm_test_case_256_5);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_256_6(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_256_6);
+	return test_authenticated_encryption(&gcm_test_case_256_6);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_256_7(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_256_7);
+	return test_authenticated_encryption(&gcm_test_case_256_7);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_aad_1(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_aad_1);
+	return test_authenticated_encryption(&gcm_test_case_aad_1);
 }
 
 static int
 test_AES_GCM_auth_encryption_test_case_aad_2(void)
 {
-	return test_AES_GCM_authenticated_encryption(&gcm_test_case_aad_2);
+	return test_authenticated_encryption(&gcm_test_case_aad_2);
 }
 
 static int
-test_AES_GCM_authenticated_decryption(const struct gcm_test_data *tdata)
+test_authenticated_decryption(const struct aead_test_data *tdata)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -5205,8 +5862,9 @@ test_AES_GCM_authenticated_decryption(const struct gcm_test_data *tdata)
 	uint8_t *plaintext;
 	uint32_t i;
 
-	/* Create GCM session */
-	retval = create_gcm_session(ts_params->valid_devs[0],
+	/* Create AEAD session */
+	retval = create_aead_session(ts_params->valid_devs[0],
+			tdata->algo,
 			RTE_CRYPTO_AEAD_OP_DECRYPT,
 			tdata->key.data, tdata->key.len,
 			tdata->aad.len, tdata->auth_tag.len,
@@ -5218,7 +5876,7 @@ test_AES_GCM_authenticated_decryption(const struct gcm_test_data *tdata)
 	if (tdata->aad.len > MBUF_SIZE) {
 		ut_params->ibuf = rte_pktmbuf_alloc(ts_params->large_mbuf_pool);
 		/* Populate full size of add data */
-		for (i = 32; i < GCM_MAX_AAD_LENGTH; i += 32)
+		for (i = 32; i < MAX_AAD_LENGTH; i += 32)
 			memcpy(&tdata->aad.data[i], &tdata->aad.data[0], 32);
 	} else
 		ut_params->ibuf = rte_pktmbuf_alloc(ts_params->mbuf_pool);
@@ -5226,8 +5884,8 @@ test_AES_GCM_authenticated_decryption(const struct gcm_test_data *tdata)
 	memset(rte_pktmbuf_mtod(ut_params->ibuf, uint8_t *), 0,
 			rte_pktmbuf_tailroom(ut_params->ibuf));
 
-	/* Create GCM operation */
-	retval = create_gcm_operation(RTE_CRYPTO_AEAD_OP_DECRYPT, tdata);
+	/* Create AEAD operation */
+	retval = create_aead_operation(RTE_CRYPTO_AEAD_OP_DECRYPT, tdata);
 	if (retval < 0)
 		return retval;
 
@@ -5250,161 +5908,161 @@ test_AES_GCM_authenticated_decryption(const struct gcm_test_data *tdata)
 				uint8_t *,
 				ut_params->op->sym->cipher.data.offset);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, tdata->ciphertext.len);
+	debug_hexdump(stdout, "plaintext:", plaintext, tdata->ciphertext.len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
 			plaintext,
 			tdata->plaintext.data,
 			tdata->plaintext.len,
-			"GCM plaintext data not as expected");
+			"Plaintext data not as expected");
 
 	TEST_ASSERT_EQUAL(ut_params->op->status,
 			RTE_CRYPTO_OP_STATUS_SUCCESS,
-			"GCM authentication failed");
+			"Authentication failed");
 	return 0;
 }
 
 static int
 test_AES_GCM_authenticated_decryption_test_case_1(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_1);
+	return test_authenticated_decryption(&gcm_test_case_1);
 }
 
 static int
 test_AES_GCM_authenticated_decryption_test_case_2(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_2);
+	return test_authenticated_decryption(&gcm_test_case_2);
 }
 
 static int
 test_AES_GCM_authenticated_decryption_test_case_3(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_3);
+	return test_authenticated_decryption(&gcm_test_case_3);
 }
 
 static int
 test_AES_GCM_authenticated_decryption_test_case_4(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_4);
+	return test_authenticated_decryption(&gcm_test_case_4);
 }
 
 static int
 test_AES_GCM_authenticated_decryption_test_case_5(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_5);
+	return test_authenticated_decryption(&gcm_test_case_5);
 }
 
 static int
 test_AES_GCM_authenticated_decryption_test_case_6(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_6);
+	return test_authenticated_decryption(&gcm_test_case_6);
 }
 
 static int
 test_AES_GCM_authenticated_decryption_test_case_7(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_7);
+	return test_authenticated_decryption(&gcm_test_case_7);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_192_1(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_192_1);
+	return test_authenticated_decryption(&gcm_test_case_192_1);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_192_2(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_192_2);
+	return test_authenticated_decryption(&gcm_test_case_192_2);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_192_3(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_192_3);
+	return test_authenticated_decryption(&gcm_test_case_192_3);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_192_4(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_192_4);
+	return test_authenticated_decryption(&gcm_test_case_192_4);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_192_5(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_192_5);
+	return test_authenticated_decryption(&gcm_test_case_192_5);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_192_6(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_192_6);
+	return test_authenticated_decryption(&gcm_test_case_192_6);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_192_7(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_192_7);
+	return test_authenticated_decryption(&gcm_test_case_192_7);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_256_1(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_256_1);
+	return test_authenticated_decryption(&gcm_test_case_256_1);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_256_2(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_256_2);
+	return test_authenticated_decryption(&gcm_test_case_256_2);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_256_3(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_256_3);
+	return test_authenticated_decryption(&gcm_test_case_256_3);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_256_4(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_256_4);
+	return test_authenticated_decryption(&gcm_test_case_256_4);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_256_5(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_256_5);
+	return test_authenticated_decryption(&gcm_test_case_256_5);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_256_6(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_256_6);
+	return test_authenticated_decryption(&gcm_test_case_256_6);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_256_7(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_256_7);
+	return test_authenticated_decryption(&gcm_test_case_256_7);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_aad_1(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_aad_1);
+	return test_authenticated_decryption(&gcm_test_case_aad_1);
 }
 
 static int
 test_AES_GCM_auth_decryption_test_case_aad_2(void)
 {
-	return test_AES_GCM_authenticated_decryption(&gcm_test_case_aad_2);
+	return test_authenticated_decryption(&gcm_test_case_aad_2);
 }
 
 static int
-test_AES_GCM_authenticated_encryption_oop(const struct gcm_test_data *tdata)
+test_authenticated_encryption_oop(const struct aead_test_data *tdata)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -5413,8 +6071,9 @@ test_AES_GCM_authenticated_encryption_oop(const struct gcm_test_data *tdata)
 	uint8_t *ciphertext, *auth_tag;
 	uint16_t plaintext_pad_len;
 
-	/* Create GCM session */
-	retval = create_gcm_session(ts_params->valid_devs[0],
+	/* Create AEAD session */
+	retval = create_aead_session(ts_params->valid_devs[0],
+			tdata->algo,
 			RTE_CRYPTO_AEAD_OP_ENCRYPT,
 			tdata->key.data, tdata->key.len,
 			tdata->aad.len, tdata->auth_tag.len,
@@ -5431,8 +6090,8 @@ test_AES_GCM_authenticated_encryption_oop(const struct gcm_test_data *tdata)
 	memset(rte_pktmbuf_mtod(ut_params->obuf, uint8_t *), 0,
 			rte_pktmbuf_tailroom(ut_params->obuf));
 
-	/* Create GCM operation */
-	retval = create_gcm_operation(RTE_CRYPTO_AEAD_OP_ENCRYPT, tdata);
+	/* Create AEAD operation */
+	retval = create_aead_operation(RTE_CRYPTO_AEAD_OP_ENCRYPT, tdata);
 	if (retval < 0)
 		return retval;
 
@@ -5454,21 +6113,21 @@ test_AES_GCM_authenticated_encryption_oop(const struct gcm_test_data *tdata)
 			ut_params->op->sym->cipher.data.offset);
 	auth_tag = ciphertext + plaintext_pad_len;
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, tdata->ciphertext.len);
-	TEST_HEXDUMP(stdout, "auth tag:", auth_tag, tdata->auth_tag.len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, tdata->ciphertext.len);
+	debug_hexdump(stdout, "auth tag:", auth_tag, tdata->auth_tag.len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
 			ciphertext,
 			tdata->ciphertext.data,
 			tdata->ciphertext.len,
-			"GCM Ciphertext data not as expected");
+			"Ciphertext data not as expected");
 
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
 			auth_tag,
 			tdata->auth_tag.data,
 			tdata->auth_tag.len,
-			"GCM Generated auth tag not as expected");
+			"Generated auth tag not as expected");
 
 	return 0;
 
@@ -5477,11 +6136,11 @@ test_AES_GCM_authenticated_encryption_oop(const struct gcm_test_data *tdata)
 static int
 test_AES_GCM_authenticated_encryption_oop_test_case_1(void)
 {
-	return test_AES_GCM_authenticated_encryption_oop(&gcm_test_case_5);
+	return test_authenticated_encryption_oop(&gcm_test_case_5);
 }
 
 static int
-test_AES_GCM_authenticated_decryption_oop(const struct gcm_test_data *tdata)
+test_authenticated_decryption_oop(const struct aead_test_data *tdata)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -5489,8 +6148,9 @@ test_AES_GCM_authenticated_decryption_oop(const struct gcm_test_data *tdata)
 	int retval;
 	uint8_t *plaintext;
 
-	/* Create GCM session */
-	retval = create_gcm_session(ts_params->valid_devs[0],
+	/* Create AEAD session */
+	retval = create_aead_session(ts_params->valid_devs[0],
+			tdata->algo,
 			RTE_CRYPTO_AEAD_OP_DECRYPT,
 			tdata->key.data, tdata->key.len,
 			tdata->aad.len, tdata->auth_tag.len,
@@ -5507,8 +6167,8 @@ test_AES_GCM_authenticated_decryption_oop(const struct gcm_test_data *tdata)
 	memset(rte_pktmbuf_mtod(ut_params->obuf, uint8_t *), 0,
 			rte_pktmbuf_tailroom(ut_params->obuf));
 
-	/* Create GCM operation */
-	retval = create_gcm_operation(RTE_CRYPTO_AEAD_OP_DECRYPT, tdata);
+	/* Create AEAD operation */
+	retval = create_aead_operation(RTE_CRYPTO_AEAD_OP_DECRYPT, tdata);
 	if (retval < 0)
 		return retval;
 
@@ -5527,30 +6187,30 @@ test_AES_GCM_authenticated_decryption_oop(const struct gcm_test_data *tdata)
 	plaintext = rte_pktmbuf_mtod_offset(ut_params->obuf, uint8_t *,
 			ut_params->op->sym->cipher.data.offset);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, tdata->ciphertext.len);
+	debug_hexdump(stdout, "plaintext:", plaintext, tdata->ciphertext.len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
 			plaintext,
 			tdata->plaintext.data,
 			tdata->plaintext.len,
-			"GCM plaintext data not as expected");
+			"Plaintext data not as expected");
 
 	TEST_ASSERT_EQUAL(ut_params->op->status,
 			RTE_CRYPTO_OP_STATUS_SUCCESS,
-			"GCM authentication failed");
+			"Authentication failed");
 	return 0;
 }
 
 static int
 test_AES_GCM_authenticated_decryption_oop_test_case_1(void)
 {
-	return test_AES_GCM_authenticated_decryption_oop(&gcm_test_case_5);
+	return test_authenticated_decryption_oop(&gcm_test_case_5);
 }
 
 static int
-test_AES_GCM_authenticated_encryption_sessionless(
-		const struct gcm_test_data *tdata)
+test_authenticated_encryption_sessionless(
+		const struct aead_test_data *tdata)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -5566,14 +6226,15 @@ test_AES_GCM_authenticated_encryption_sessionless(
 	memset(rte_pktmbuf_mtod(ut_params->ibuf, uint8_t *), 0,
 			rte_pktmbuf_tailroom(ut_params->ibuf));
 
-	/* Create GCM operation */
-	retval = create_gcm_operation(RTE_CRYPTO_AEAD_OP_ENCRYPT, tdata);
+	/* Create AEAD operation */
+	retval = create_aead_operation(RTE_CRYPTO_AEAD_OP_ENCRYPT, tdata);
 	if (retval < 0)
 		return retval;
 
-	/* Create GCM xforms */
+	/* Create GCM xform */
 	memcpy(key, tdata->key.data, tdata->key.len);
-	retval = create_gcm_xforms(ut_params->op,
+	retval = create_aead_xform(ut_params->op,
+			tdata->algo,
 			RTE_CRYPTO_AEAD_OP_ENCRYPT,
 			key, tdata->key.len,
 			tdata->aad.len, tdata->auth_tag.len,
@@ -5602,21 +6263,21 @@ test_AES_GCM_authenticated_encryption_sessionless(
 			ut_params->op->sym->cipher.data.offset);
 	auth_tag = ciphertext + plaintext_pad_len;
 
-	TEST_HEXDUMP(stdout, "ciphertext:", ciphertext, tdata->ciphertext.len);
-	TEST_HEXDUMP(stdout, "auth tag:", auth_tag, tdata->auth_tag.len);
+	debug_hexdump(stdout, "ciphertext:", ciphertext, tdata->ciphertext.len);
+	debug_hexdump(stdout, "auth tag:", auth_tag, tdata->auth_tag.len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
 			ciphertext,
 			tdata->ciphertext.data,
 			tdata->ciphertext.len,
-			"GCM Ciphertext data not as expected");
+			"Ciphertext data not as expected");
 
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
 			auth_tag,
 			tdata->auth_tag.data,
 			tdata->auth_tag.len,
-			"GCM Generated auth tag not as expected");
+			"Generated auth tag not as expected");
 
 	return 0;
 
@@ -5625,13 +6286,13 @@ test_AES_GCM_authenticated_encryption_sessionless(
 static int
 test_AES_GCM_authenticated_encryption_sessionless_test_case_1(void)
 {
-	return test_AES_GCM_authenticated_encryption_sessionless(
+	return test_authenticated_encryption_sessionless(
 			&gcm_test_case_5);
 }
 
 static int
-test_AES_GCM_authenticated_decryption_sessionless(
-		const struct gcm_test_data *tdata)
+test_authenticated_decryption_sessionless(
+		const struct aead_test_data *tdata)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -5646,14 +6307,15 @@ test_AES_GCM_authenticated_decryption_sessionless(
 	memset(rte_pktmbuf_mtod(ut_params->ibuf, uint8_t *), 0,
 			rte_pktmbuf_tailroom(ut_params->ibuf));
 
-	/* Create GCM operation */
-	retval = create_gcm_operation(RTE_CRYPTO_AEAD_OP_DECRYPT, tdata);
+	/* Create AEAD operation */
+	retval = create_aead_operation(RTE_CRYPTO_AEAD_OP_DECRYPT, tdata);
 	if (retval < 0)
 		return retval;
 
-	/* Create GCM xforms */
+	/* Create AEAD xform */
 	memcpy(key, tdata->key.data, tdata->key.len);
-	retval = create_gcm_xforms(ut_params->op,
+	retval = create_aead_xform(ut_params->op,
+			tdata->algo,
 			RTE_CRYPTO_AEAD_OP_DECRYPT,
 			key, tdata->key.len,
 			tdata->aad.len, tdata->auth_tag.len,
@@ -5679,26 +6341,134 @@ test_AES_GCM_authenticated_decryption_sessionless(
 	plaintext = rte_pktmbuf_mtod_offset(ut_params->ibuf, uint8_t *,
 			ut_params->op->sym->cipher.data.offset);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, tdata->ciphertext.len);
+	debug_hexdump(stdout, "plaintext:", plaintext, tdata->ciphertext.len);
 
 	/* Validate obuf */
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
 			plaintext,
 			tdata->plaintext.data,
 			tdata->plaintext.len,
-			"GCM plaintext data not as expected");
+			"Plaintext data not as expected");
 
 	TEST_ASSERT_EQUAL(ut_params->op->status,
 			RTE_CRYPTO_OP_STATUS_SUCCESS,
-			"GCM authentication failed");
+			"Authentication failed");
 	return 0;
 }
 
 static int
 test_AES_GCM_authenticated_decryption_sessionless_test_case_1(void)
 {
-	return test_AES_GCM_authenticated_decryption_sessionless(
+	return test_authenticated_decryption_sessionless(
 			&gcm_test_case_5);
+}
+
+static int
+test_AES_CCM_authenticated_encryption_test_case_128_1(void)
+{
+	return test_authenticated_encryption(&ccm_test_case_128_1);
+}
+
+static int
+test_AES_CCM_authenticated_encryption_test_case_128_2(void)
+{
+	return test_authenticated_encryption(&ccm_test_case_128_2);
+}
+
+static int
+test_AES_CCM_authenticated_encryption_test_case_128_3(void)
+{
+	return test_authenticated_encryption(&ccm_test_case_128_3);
+}
+
+static int
+test_AES_CCM_authenticated_decryption_test_case_128_1(void)
+{
+	return test_authenticated_decryption(&ccm_test_case_128_1);
+}
+
+static int
+test_AES_CCM_authenticated_decryption_test_case_128_2(void)
+{
+	return test_authenticated_decryption(&ccm_test_case_128_2);
+}
+
+static int
+test_AES_CCM_authenticated_decryption_test_case_128_3(void)
+{
+	return test_authenticated_decryption(&ccm_test_case_128_3);
+}
+
+static int
+test_AES_CCM_authenticated_encryption_test_case_192_1(void)
+{
+	return test_authenticated_encryption(&ccm_test_case_192_1);
+}
+
+static int
+test_AES_CCM_authenticated_encryption_test_case_192_2(void)
+{
+	return test_authenticated_encryption(&ccm_test_case_192_2);
+}
+
+static int
+test_AES_CCM_authenticated_encryption_test_case_192_3(void)
+{
+	return test_authenticated_encryption(&ccm_test_case_192_3);
+}
+
+static int
+test_AES_CCM_authenticated_decryption_test_case_192_1(void)
+{
+	return test_authenticated_decryption(&ccm_test_case_192_1);
+}
+
+static int
+test_AES_CCM_authenticated_decryption_test_case_192_2(void)
+{
+	return test_authenticated_decryption(&ccm_test_case_192_2);
+}
+
+static int
+test_AES_CCM_authenticated_decryption_test_case_192_3(void)
+{
+	return test_authenticated_decryption(&ccm_test_case_192_3);
+}
+
+static int
+test_AES_CCM_authenticated_encryption_test_case_256_1(void)
+{
+	return test_authenticated_encryption(&ccm_test_case_256_1);
+}
+
+static int
+test_AES_CCM_authenticated_encryption_test_case_256_2(void)
+{
+	return test_authenticated_encryption(&ccm_test_case_256_2);
+}
+
+static int
+test_AES_CCM_authenticated_encryption_test_case_256_3(void)
+{
+	return test_authenticated_encryption(&ccm_test_case_256_3);
+}
+
+static int
+test_AES_CCM_authenticated_decryption_test_case_256_1(void)
+{
+	return test_authenticated_decryption(&ccm_test_case_256_1);
+}
+
+static int
+test_AES_CCM_authenticated_decryption_test_case_256_2(void)
+{
+	return test_authenticated_decryption(&ccm_test_case_256_2);
+}
+
+static int
+test_AES_CCM_authenticated_decryption_test_case_256_3(void)
+{
+	return test_authenticated_decryption(&ccm_test_case_256_3);
 }
 
 static int
@@ -5817,7 +6587,7 @@ static int MD5_HMAC_create_op(struct crypto_unittest_params *ut_params,
 			ut_params->ibuf, MD5_DIGEST_LEN);
 	TEST_ASSERT_NOT_NULL(sym_op->auth.digest.data,
 			"no room to append digest");
-	sym_op->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(
 			ut_params->ibuf, plaintext_pad_len);
 
 	if (ut_params->auth_xform.auth.op == RTE_CRYPTO_AUTH_OP_VERIFY) {
@@ -5955,10 +6725,10 @@ test_multi_session(void)
 
 	sessions = rte_malloc(NULL,
 			(sizeof(struct rte_cryptodev_sym_session *) *
-			dev_info.sym.max_nb_sessions) + 1, 0);
+			MAX_NB_SESSIONS) + 1, 0);
 
 	/* Create multiple crypto sessions*/
-	for (i = 0; i < dev_info.sym.max_nb_sessions; i++) {
+	for (i = 0; i < MAX_NB_SESSIONS; i++) {
 
 		sessions[i] = rte_cryptodev_sym_session_create(
 				ts_params->session_mpool);
@@ -6007,7 +6777,7 @@ test_multi_session(void)
 	TEST_ASSERT_NULL(sessions[i],
 			"Session creation succeeded unexpectedly!");
 
-	for (i = 0; i < dev_info.sym.max_nb_sessions; i++) {
+	for (i = 0; i < MAX_NB_SESSIONS; i++) {
 		rte_cryptodev_sym_session_clear(ts_params->valid_devs[0],
 				sessions[i]);
 		rte_cryptodev_sym_session_free(sessions[i]);
@@ -6066,13 +6836,13 @@ test_multi_session_random_usage(void)
 
 	sessions = rte_malloc(NULL,
 			(sizeof(struct rte_cryptodev_sym_session *)
-					* dev_info.sym.max_nb_sessions) + 1, 0);
+					* MAX_NB_SESSIONS) + 1, 0);
 
 	for (i = 0; i < MB_SESSION_NUMBER; i++) {
 		sessions[i] = rte_cryptodev_sym_session_create(
 				ts_params->session_mpool);
 
-		rte_memcpy(&ut_paramz[i].ut_params, &testsuite_params,
+		rte_memcpy(&ut_paramz[i].ut_params, &unittest_params,
 				sizeof(struct crypto_unittest_params));
 
 		test_AES_CBC_HMAC_SHA512_decrypt_create_session_params(
@@ -6199,16 +6969,28 @@ test_null_cipher_only_operation(void)
 
 	return TEST_SUCCESS;
 }
-
+uint8_t orig_data[] = {0xab, 0xab, 0xab, 0xab,
+			0xab, 0xab, 0xab, 0xab,
+			0xab, 0xab, 0xab, 0xab,
+			0xab, 0xab, 0xab, 0xab};
 static int
 test_null_auth_only_operation(void)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
+	uint8_t *digest;
 
 	/* Generate test mbuf data and space for digest */
 	ut_params->ibuf = setup_test_string(ts_params->mbuf_pool,
 			catch_22_quote, QUOTE_512_BYTES, 0);
+
+	/* create a pointer for digest, but don't expect anything to be written
+	 * here in a NULL auth algo so no mbuf append done.
+	 */
+	digest = rte_pktmbuf_mtod_offset(ut_params->ibuf, uint8_t *,
+			QUOTE_512_BYTES);
+	/* prefill the memory pointed to by digest */
+	memcpy(digest, orig_data, sizeof(orig_data));
 
 	/* Setup HMAC Parameters */
 	ut_params->auth_xform.type = RTE_CRYPTO_SYM_XFORM_AUTH;
@@ -6241,6 +7023,9 @@ test_null_auth_only_operation(void)
 
 	sym_op->auth.data.offset = 0;
 	sym_op->auth.data.length = QUOTE_512_BYTES;
+	sym_op->auth.digest.data = digest;
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(ut_params->ibuf,
+			QUOTE_512_BYTES);
 
 	/* Process crypto operation */
 	ut_params->op = process_crypto_request(ts_params->valid_devs[0],
@@ -6249,19 +7034,35 @@ test_null_auth_only_operation(void)
 
 	TEST_ASSERT_EQUAL(ut_params->op->status, RTE_CRYPTO_OP_STATUS_SUCCESS,
 			"crypto operation processing failed");
+	/* Make sure memory pointed to by digest hasn't been overwritten */
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(
+			orig_data,
+			digest,
+			sizeof(orig_data),
+			"Memory at digest ptr overwritten unexpectedly");
 
 	return TEST_SUCCESS;
 }
+
 
 static int
 test_null_cipher_auth_operation(void)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
+	uint8_t *digest;
 
 	/* Generate test mbuf data and space for digest */
 	ut_params->ibuf = setup_test_string(ts_params->mbuf_pool,
 			catch_22_quote, QUOTE_512_BYTES, 0);
+
+	/* create a pointer for digest, but don't expect anything to be written
+	 * here in a NULL auth algo so no mbuf append done.
+	 */
+	digest = rte_pktmbuf_mtod_offset(ut_params->ibuf, uint8_t *,
+			QUOTE_512_BYTES);
+	/* prefill the memory pointed to by digest */
+	memcpy(digest, orig_data, sizeof(orig_data));
 
 	/* Setup Cipher Parameters */
 	ut_params->cipher_xform.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
@@ -6304,6 +7105,9 @@ test_null_cipher_auth_operation(void)
 
 	sym_op->auth.data.offset = 0;
 	sym_op->auth.data.length = QUOTE_512_BYTES;
+	sym_op->auth.digest.data = digest;
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(ut_params->ibuf,
+			QUOTE_512_BYTES);
 
 	/* Process crypto operation */
 	ut_params->op = process_crypto_request(ts_params->valid_devs[0],
@@ -6319,6 +7123,12 @@ test_null_cipher_auth_operation(void)
 			catch_22_quote,
 			QUOTE_512_BYTES,
 			"Ciphertext data not as expected");
+	/* Make sure memory pointed to by digest hasn't been overwritten */
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(
+			orig_data,
+			digest,
+			sizeof(orig_data),
+			"Memory at digest ptr overwritten unexpectedly");
 
 	return TEST_SUCCESS;
 }
@@ -6328,10 +7138,19 @@ test_null_auth_cipher_operation(void)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
+	uint8_t *digest;
 
-	/* Generate test mbuf data and space for digest */
+	/* Generate test mbuf data */
 	ut_params->ibuf = setup_test_string(ts_params->mbuf_pool,
 			catch_22_quote, QUOTE_512_BYTES, 0);
+
+	/* create a pointer for digest, but don't expect anything to be written
+	 * here in a NULL auth algo so no mbuf append done.
+	 */
+	digest = rte_pktmbuf_mtod_offset(ut_params->ibuf, uint8_t *,
+				QUOTE_512_BYTES);
+	/* prefill the memory pointed to by digest */
+	memcpy(digest, orig_data, sizeof(orig_data));
 
 	/* Setup Cipher Parameters */
 	ut_params->cipher_xform.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
@@ -6374,6 +7193,9 @@ test_null_auth_cipher_operation(void)
 
 	sym_op->auth.data.offset = 0;
 	sym_op->auth.data.length = QUOTE_512_BYTES;
+	sym_op->auth.digest.data = digest;
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(ut_params->ibuf,
+					QUOTE_512_BYTES);
 
 	/* Process crypto operation */
 	ut_params->op = process_crypto_request(ts_params->valid_devs[0],
@@ -6389,6 +7211,12 @@ test_null_auth_cipher_operation(void)
 			catch_22_quote,
 			QUOTE_512_BYTES,
 			"Ciphertext data not as expected");
+	/* Make sure memory pointed to by digest hasn't been overwritten */
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(
+			orig_data,
+			digest,
+			sizeof(orig_data),
+			"Memory at digest ptr overwritten unexpectedly");
 
 	return TEST_SUCCESS;
 }
@@ -6553,13 +7381,13 @@ create_gmac_operation(enum rte_crypto_auth_operation op,
 	TEST_ASSERT_NOT_NULL(sym_op->auth.digest.data,
 			"no room to append digest");
 
-	sym_op->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(
 			ut_params->ibuf, plaintext_pad_len);
 
 	if (op == RTE_CRYPTO_AUTH_OP_VERIFY) {
 		rte_memcpy(sym_op->auth.digest.data, tdata->gmac_tag.data,
 				tdata->gmac_tag.len);
-		TEST_HEXDUMP(stdout, "digest:",
+		debug_hexdump(stdout, "digest:",
 				sym_op->auth.digest.data,
 				tdata->gmac_tag.len);
 	}
@@ -6569,7 +7397,7 @@ create_gmac_operation(enum rte_crypto_auth_operation op,
 
 	rte_memcpy(iv_ptr, tdata->iv.data, tdata->iv.len);
 
-	TEST_HEXDUMP(stdout, "iv:", iv_ptr, tdata->iv.len);
+	debug_hexdump(stdout, "iv:", iv_ptr, tdata->iv.len);
 
 	sym_op->cipher.data.length = 0;
 	sym_op->cipher.data.offset = 0;
@@ -6659,7 +7487,7 @@ test_AES_GMAC_authentication(const struct gmac_test_data *tdata)
 	TEST_ASSERT_NOT_NULL(plaintext, "no room to append plaintext");
 
 	memcpy(plaintext, tdata->plaintext.data, tdata->plaintext.len);
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext,
+	debug_hexdump(stdout, "plaintext:", plaintext,
 			tdata->plaintext.len);
 
 	retval = create_gmac_operation(RTE_CRYPTO_AUTH_OP_GENERATE,
@@ -6685,7 +7513,7 @@ test_AES_GMAC_authentication(const struct gmac_test_data *tdata)
 		auth_tag = plaintext + plaintext_pad_len;
 	}
 
-	TEST_HEXDUMP(stdout, "auth tag:", auth_tag, tdata->gmac_tag.len);
+	debug_hexdump(stdout, "auth tag:", auth_tag, tdata->gmac_tag.len);
 
 	TEST_ASSERT_BUFFERS_ARE_EQUAL(
 			auth_tag,
@@ -6763,7 +7591,7 @@ test_AES_GMAC_authentication_verify(const struct gmac_test_data *tdata)
 	TEST_ASSERT_NOT_NULL(plaintext, "no room to append plaintext");
 
 	memcpy(plaintext, tdata->plaintext.data, tdata->plaintext.len);
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext,
+	debug_hexdump(stdout, "plaintext:", plaintext,
 			tdata->plaintext.len);
 
 	retval = create_gmac_operation(RTE_CRYPTO_AUTH_OP_VERIFY,
@@ -7075,7 +7903,7 @@ create_auth_operation(struct crypto_testsuite_params *ts_params,
 	TEST_ASSERT_NOT_NULL(sym_op->auth.digest.data,
 			"no room to append auth tag");
 
-	sym_op->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(
 			ut_params->ibuf, reference->plaintext.len);
 
 	if (auth_generate)
@@ -7085,7 +7913,7 @@ create_auth_operation(struct crypto_testsuite_params *ts_params,
 				reference->digest.data,
 				reference->digest.len);
 
-	TEST_HEXDUMP(stdout, "digest:",
+	debug_hexdump(stdout, "digest:",
 			sym_op->auth.digest.data,
 			reference->digest.len);
 
@@ -7122,7 +7950,7 @@ create_auth_GMAC_operation(struct crypto_testsuite_params *ts_params,
 	TEST_ASSERT_NOT_NULL(sym_op->auth.digest.data,
 			"no room to append auth tag");
 
-	sym_op->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(
 			ut_params->ibuf, reference->ciphertext.len);
 
 	if (auth_generate)
@@ -7132,7 +7960,7 @@ create_auth_GMAC_operation(struct crypto_testsuite_params *ts_params,
 				reference->digest.data,
 				reference->digest.len);
 
-	TEST_HEXDUMP(stdout, "digest:",
+	debug_hexdump(stdout, "digest:",
 			sym_op->auth.digest.data,
 			reference->digest.len);
 
@@ -7175,7 +8003,7 @@ create_cipher_auth_operation(struct crypto_testsuite_params *ts_params,
 	TEST_ASSERT_NOT_NULL(sym_op->auth.digest.data,
 			"no room to append auth tag");
 
-	sym_op->auth.digest.phys_addr = rte_pktmbuf_mtophys_offset(
+	sym_op->auth.digest.phys_addr = rte_pktmbuf_iova_offset(
 			ut_params->ibuf, reference->ciphertext.len);
 
 	if (auth_generate)
@@ -7185,7 +8013,7 @@ create_cipher_auth_operation(struct crypto_testsuite_params *ts_params,
 				reference->digest.data,
 				reference->digest.len);
 
-	TEST_HEXDUMP(stdout, "digest:",
+	debug_hexdump(stdout, "digest:",
 			sym_op->auth.digest.data,
 			reference->digest.len);
 
@@ -7258,7 +8086,8 @@ test_authentication_verify_fail_when_data_corruption(
 	TEST_ASSERT_NOT_NULL(plaintext, "no room to append plaintext");
 	memcpy(plaintext, reference->plaintext.data, reference->plaintext.len);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, reference->plaintext.len);
+	debug_hexdump(stdout, "plaintext:", plaintext,
+		reference->plaintext.len);
 
 	/* Create operation */
 	retval = create_auth_verify_operation(ts_params, ut_params, reference);
@@ -7316,7 +8145,8 @@ test_authentication_verify_GMAC_fail_when_corruption(
 	TEST_ASSERT_NOT_NULL(plaintext, "no room to append plaintext");
 	memcpy(plaintext, reference->plaintext.data, reference->plaintext.len);
 
-	TEST_HEXDUMP(stdout, "plaintext:", plaintext, reference->plaintext.len);
+	debug_hexdump(stdout, "plaintext:", plaintext,
+		reference->plaintext.len);
 
 	/* Create operation */
 	retval = create_auth_verify_GMAC_operation(ts_params,
@@ -7406,8 +8236,8 @@ test_authenticated_decryption_fail_when_corruption(
 }
 
 static int
-create_gcm_operation_SGL(enum rte_crypto_aead_operation op,
-		const struct gcm_test_data *tdata,
+create_aead_operation_SGL(enum rte_crypto_aead_operation op,
+		const struct aead_test_data *tdata,
 		void *digest_mem, uint64_t digest_phys)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
@@ -7415,7 +8245,7 @@ create_gcm_operation_SGL(enum rte_crypto_aead_operation op,
 
 	const unsigned int auth_tag_len = tdata->auth_tag.len;
 	const unsigned int iv_len = tdata->iv.len;
-	const unsigned int aad_len = tdata->aad.len;
+	unsigned int aad_len = tdata->aad.len;
 
 	/* Generate Crypto op data structure */
 	ut_params->op = rte_crypto_op_alloc(ts_params->op_mpool,
@@ -7435,29 +8265,55 @@ create_gcm_operation_SGL(enum rte_crypto_aead_operation op,
 	if (op == RTE_CRYPTO_AEAD_OP_DECRYPT) {
 		rte_memcpy(sym_op->aead.digest.data, tdata->auth_tag.data,
 				auth_tag_len);
-		TEST_HEXDUMP(stdout, "digest:",
+		debug_hexdump(stdout, "digest:",
 				sym_op->aead.digest.data,
 				auth_tag_len);
 	}
 
-	uint8_t *iv_ptr = rte_crypto_op_ctod_offset(ut_params->op,
-			uint8_t *, IV_OFFSET);
+	/* Append aad data */
+	if (tdata->algo == RTE_CRYPTO_AEAD_AES_CCM) {
+		uint8_t *iv_ptr = rte_crypto_op_ctod_offset(ut_params->op,
+				uint8_t *, IV_OFFSET);
 
-	rte_memcpy(iv_ptr, tdata->iv.data, iv_len);
+		/* Copy IV 1 byte after the IV pointer, according to the API */
+		rte_memcpy(iv_ptr + 1, tdata->iv.data, iv_len);
 
-	sym_op->aead.aad.data = (uint8_t *)rte_pktmbuf_prepend(
-			ut_params->ibuf, aad_len);
-	TEST_ASSERT_NOT_NULL(sym_op->aead.aad.data,
-			"no room to prepend aad");
-	sym_op->aead.aad.phys_addr = rte_pktmbuf_mtophys(
-			ut_params->ibuf);
+		aad_len = RTE_ALIGN_CEIL(aad_len + 18, 16);
 
-	memset(sym_op->aead.aad.data, 0, aad_len);
-	rte_memcpy(sym_op->aead.aad.data, tdata->aad.data, aad_len);
+		sym_op->aead.aad.data = (uint8_t *)rte_pktmbuf_prepend(
+				ut_params->ibuf, aad_len);
+		TEST_ASSERT_NOT_NULL(sym_op->aead.aad.data,
+				"no room to prepend aad");
+		sym_op->aead.aad.phys_addr = rte_pktmbuf_iova(
+				ut_params->ibuf);
 
-	TEST_HEXDUMP(stdout, "iv:", iv_ptr, iv_len);
-	TEST_HEXDUMP(stdout, "aad:",
-			sym_op->aead.aad.data, aad_len);
+		memset(sym_op->aead.aad.data, 0, aad_len);
+		/* Copy AAD 18 bytes after the AAD pointer, according to the API */
+		rte_memcpy(sym_op->aead.aad.data, tdata->aad.data, aad_len);
+
+		debug_hexdump(stdout, "iv:", iv_ptr, iv_len);
+		debug_hexdump(stdout, "aad:",
+				sym_op->aead.aad.data, aad_len);
+	} else {
+		uint8_t *iv_ptr = rte_crypto_op_ctod_offset(ut_params->op,
+				uint8_t *, IV_OFFSET);
+
+		rte_memcpy(iv_ptr, tdata->iv.data, iv_len);
+
+		sym_op->aead.aad.data = (uint8_t *)rte_pktmbuf_prepend(
+				ut_params->ibuf, aad_len);
+		TEST_ASSERT_NOT_NULL(sym_op->aead.aad.data,
+				"no room to prepend aad");
+		sym_op->aead.aad.phys_addr = rte_pktmbuf_iova(
+				ut_params->ibuf);
+
+		memset(sym_op->aead.aad.data, 0, aad_len);
+		rte_memcpy(sym_op->aead.aad.data, tdata->aad.data, aad_len);
+
+		debug_hexdump(stdout, "iv:", iv_ptr, iv_len);
+		debug_hexdump(stdout, "aad:",
+				sym_op->aead.aad.data, aad_len);
+	}
 
 	sym_op->aead.data.length = tdata->plaintext.len;
 	sym_op->aead.data.offset = aad_len;
@@ -7468,7 +8324,7 @@ create_gcm_operation_SGL(enum rte_crypto_aead_operation op,
 #define SGL_MAX_NO	16
 
 static int
-test_AES_GCM_authenticated_encryption_SGL(const struct gcm_test_data *tdata,
+test_authenticated_encryption_SGL(const struct aead_test_data *tdata,
 		const int oop, uint32_t fragsz, uint32_t fragsz_oop)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
@@ -7513,8 +8369,9 @@ test_AES_GCM_authenticated_encryption_SGL(const struct gcm_test_data *tdata,
 		buf_oop = ut_params->obuf;
 	}
 
-	/* Create GCM session */
-	retval = create_gcm_session(ts_params->valid_devs[0],
+	/* Create AEAD session */
+	retval = create_aead_session(ts_params->valid_devs[0],
+			tdata->algo,
 			RTE_CRYPTO_AEAD_OP_ENCRYPT,
 			tdata->key.data, tdata->key.len,
 			tdata->aad.len, tdata->auth_tag.len,
@@ -7594,7 +8451,7 @@ test_AES_GCM_authenticated_encryption_SGL(const struct gcm_test_data *tdata,
 			digest_mem = rte_pktmbuf_append(ut_params->obuf,
 				tdata->auth_tag.len);
 
-			digest_phys = rte_pktmbuf_mtophys_offset(
+			digest_phys = rte_pktmbuf_iova_offset(
 					ut_params->obuf,
 					tdata->plaintext.len + prepend_len);
 		}
@@ -7632,19 +8489,19 @@ test_AES_GCM_authenticated_encryption_SGL(const struct gcm_test_data *tdata,
 	 * Place digest at the end of the last buffer
 	 */
 	if (!digest_phys)
-		digest_phys = rte_pktmbuf_mtophys(buf) + to_trn;
+		digest_phys = rte_pktmbuf_iova(buf) + to_trn;
 	if (oop && buf_last_oop)
-		digest_phys = rte_pktmbuf_mtophys(buf_last_oop) + to_trn;
+		digest_phys = rte_pktmbuf_iova(buf_last_oop) + to_trn;
 
 	if (!digest_mem && !oop) {
 		digest_mem = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf,
 				+ tdata->auth_tag.len);
-		digest_phys = rte_pktmbuf_mtophys_offset(ut_params->ibuf,
+		digest_phys = rte_pktmbuf_iova_offset(ut_params->ibuf,
 				tdata->plaintext.len);
 	}
 
-	/* Create GCM opertaion */
-	retval = create_gcm_operation_SGL(RTE_CRYPTO_AEAD_OP_ENCRYPT,
+	/* Create AEAD operation */
+	retval = create_aead_operation_SGL(RTE_CRYPTO_AEAD_OP_ENCRYPT,
 			tdata, digest_mem, digest_phys);
 
 	if (retval < 0)
@@ -7678,7 +8535,7 @@ test_AES_GCM_authenticated_encryption_SGL(const struct gcm_test_data *tdata,
 			ciphertext,
 			tdata->ciphertext.data,
 			fragsz,
-			"GCM Ciphertext data not as expected");
+			"Ciphertext data not as expected");
 
 	buf = ut_params->op->sym->m_src->next;
 	if (oop)
@@ -7695,7 +8552,7 @@ test_AES_GCM_authenticated_encryption_SGL(const struct gcm_test_data *tdata,
 				ciphertext,
 				tdata->ciphertext.data + off,
 				to_trn_tbl[ecx],
-				"GCM Ciphertext data not as expected");
+				"Ciphertext data not as expected");
 
 		off += to_trn_tbl[ecx++];
 		buf = buf->next;
@@ -7706,7 +8563,7 @@ test_AES_GCM_authenticated_encryption_SGL(const struct gcm_test_data *tdata,
 			auth_tag,
 			tdata->auth_tag.data,
 			tdata->auth_tag.len,
-			"GCM Generated auth tag not as expected");
+			"Generated auth tag not as expected");
 
 	return 0;
 }
@@ -7717,21 +8574,21 @@ test_AES_GCM_authenticated_encryption_SGL(const struct gcm_test_data *tdata,
 static int
 test_AES_GCM_auth_encrypt_SGL_out_of_place_400B_400B(void)
 {
-	return test_AES_GCM_authenticated_encryption_SGL(
+	return test_authenticated_encryption_SGL(
 			&gcm_test_case_SGL_1, OUT_OF_PLACE, 400, 400);
 }
 
 static int
 test_AES_GCM_auth_encrypt_SGL_out_of_place_1500B_2000B(void)
 {
-	return test_AES_GCM_authenticated_encryption_SGL(
+	return test_authenticated_encryption_SGL(
 			&gcm_test_case_SGL_1, OUT_OF_PLACE, 1500, 2000);
 }
 
 static int
 test_AES_GCM_auth_encrypt_SGL_out_of_place_400B_1seg(void)
 {
-	return test_AES_GCM_authenticated_encryption_SGL(
+	return test_authenticated_encryption_SGL(
 			&gcm_test_case_8, OUT_OF_PLACE, 400,
 			gcm_test_case_8.plaintext.len);
 }
@@ -7740,7 +8597,7 @@ static int
 test_AES_GCM_auth_encrypt_SGL_in_place_1500B(void)
 {
 
-	return test_AES_GCM_authenticated_encryption_SGL(
+	return test_authenticated_encryption_SGL(
 			&gcm_test_case_SGL_1, IN_PLACE, 1500, 0);
 }
 
@@ -7904,8 +8761,17 @@ test_scheduler_attach_slave_op(void)
 			rte_mempool_free(ts_params->session_mpool);
 			ts_params->session_mpool = NULL;
 		}
-		unsigned int session_size = rte_cryptodev_get_private_session_size(i);
+		unsigned int session_size =
+			rte_cryptodev_sym_get_private_session_size(i);
 
+		if (info.sym.max_nb_sessions != 0 &&
+				info.sym.max_nb_sessions < MAX_NB_SESSIONS) {
+			RTE_LOG(ERR, USER1,
+					"Device does not support "
+					"at least %u sessions\n",
+					MAX_NB_SESSIONS);
+			return TEST_FAILED;
+		}
 		/*
 		 * Create mempool with maximum number of sessions * 2,
 		 * to include the session headers
@@ -7913,7 +8779,7 @@ test_scheduler_attach_slave_op(void)
 		if (ts_params->session_mpool == NULL) {
 			ts_params->session_mpool = rte_mempool_create(
 					"test_sess_mp",
-					info.sym.max_nb_sessions * 2,
+					MAX_NB_SESSIONS * 2,
 					session_size,
 					0, 0, NULL, NULL, NULL,
 					NULL, SOCKET_ID_ANY,
@@ -7957,33 +8823,47 @@ test_scheduler_detach_slave_op(void)
 }
 
 static int
-test_scheduler_mode_op(void)
+test_scheduler_mode_op(enum rte_cryptodev_scheduler_mode scheduler_mode)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	uint8_t sched_id = ts_params->valid_devs[0];
-	struct rte_cryptodev_scheduler_ops op = {0};
-	struct rte_cryptodev_scheduler dummy_scheduler = {
-		.description = "dummy scheduler to test mode",
-		.name = "dummy scheduler",
-		.mode = CDEV_SCHED_MODE_USERDEFINED,
-		.ops = &op
-	};
-	int ret;
+	/* set mode */
+	return rte_cryptodev_scheduler_mode_set(sched_id,
+		scheduler_mode);
+}
 
-	/* set user defined mode */
-	ret = rte_cryptodev_scheduler_load_user_scheduler(sched_id,
-			&dummy_scheduler);
-	TEST_ASSERT(ret == 0,
-		"Failed to set cdev %u to user defined mode", sched_id);
+static int
+test_scheduler_mode_roundrobin_op(void)
+{
+	TEST_ASSERT(test_scheduler_mode_op(CDEV_SCHED_MODE_ROUNDROBIN) ==
+			0, "Failed to set roundrobin mode");
+	return 0;
 
-	/* set round robin mode */
-	ret = rte_cryptodev_scheduler_mode_set(sched_id,
-			CDEV_SCHED_MODE_ROUNDROBIN);
-	TEST_ASSERT(ret == 0,
-		"Failed to set cdev %u to round-robin mode", sched_id);
-	TEST_ASSERT(rte_cryptodev_scheduler_mode_get(sched_id) ==
-			CDEV_SCHED_MODE_ROUNDROBIN, "Scheduling Mode "
-					"not match");
+}
+
+static int
+test_scheduler_mode_multicore_op(void)
+{
+	TEST_ASSERT(test_scheduler_mode_op(CDEV_SCHED_MODE_MULTICORE) ==
+			0, "Failed to set multicore mode");
+
+	return 0;
+}
+
+static int
+test_scheduler_mode_failover_op(void)
+{
+	TEST_ASSERT(test_scheduler_mode_op(CDEV_SCHED_MODE_FAILOVER) ==
+			0, "Failed to set failover mode");
+
+	return 0;
+}
+
+static int
+test_scheduler_mode_pkt_size_distr_op(void)
+{
+	TEST_ASSERT(test_scheduler_mode_op(CDEV_SCHED_MODE_PKT_SIZE_DISTR) ==
+			0, "Failed to set pktsize mode");
 
 	return 0;
 }
@@ -7993,8 +8873,20 @@ static struct unit_test_suite cryptodev_scheduler_testsuite  = {
 	.setup = testsuite_setup,
 	.teardown = testsuite_teardown,
 	.unit_test_cases = {
+		/* Multi Core */
 		TEST_CASE_ST(NULL, NULL, test_scheduler_attach_slave_op),
-		TEST_CASE_ST(NULL, NULL, test_scheduler_mode_op),
+		TEST_CASE_ST(NULL, NULL, test_scheduler_mode_multicore_op),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+					test_AES_chain_scheduler_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+					test_AES_cipheronly_scheduler_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+					test_authonly_scheduler_all),
+		TEST_CASE_ST(NULL, NULL, test_scheduler_detach_slave_op),
+
+		/* Round Robin */
+		TEST_CASE_ST(NULL, NULL, test_scheduler_attach_slave_op),
+		TEST_CASE_ST(NULL, NULL, test_scheduler_mode_roundrobin_op),
 		TEST_CASE_ST(ut_setup, ut_teardown,
 				test_AES_chain_scheduler_all),
 		TEST_CASE_ST(ut_setup, ut_teardown,
@@ -8002,6 +8894,29 @@ static struct unit_test_suite cryptodev_scheduler_testsuite  = {
 		TEST_CASE_ST(ut_setup, ut_teardown,
 				test_authonly_scheduler_all),
 		TEST_CASE_ST(NULL, NULL, test_scheduler_detach_slave_op),
+
+		/* Fail over */
+		TEST_CASE_ST(NULL, NULL, test_scheduler_attach_slave_op),
+		TEST_CASE_ST(NULL, NULL, test_scheduler_mode_failover_op),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+					test_AES_chain_scheduler_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+					test_AES_cipheronly_scheduler_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+					test_authonly_scheduler_all),
+		TEST_CASE_ST(NULL, NULL, test_scheduler_detach_slave_op),
+
+		/* PKT SIZE */
+		TEST_CASE_ST(NULL, NULL, test_scheduler_attach_slave_op),
+		TEST_CASE_ST(NULL, NULL, test_scheduler_mode_pkt_size_distr_op),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+					test_AES_chain_scheduler_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+					test_AES_cipheronly_scheduler_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+					test_authonly_scheduler_all),
+		TEST_CASE_ST(NULL, NULL, test_scheduler_detach_slave_op),
+
 		TEST_CASES_END() /**< NULL terminate unit test array */
 	}
 };
@@ -8036,6 +8951,22 @@ static struct unit_test_suite cryptodev_qat_testsuite  = {
 						test_DES_docsis_qat_all),
 		TEST_CASE_ST(ut_setup, ut_teardown, test_authonly_qat_all),
 		TEST_CASE_ST(ut_setup, ut_teardown, test_stats),
+
+		/** AES CCM Authenticated Encryption 128 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_128_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_128_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_128_3),
+
+		/** AES CCM Authenticated Decryption 128 bits key*/
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_128_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_128_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_128_3),
 
 		/** AES GCM Authenticated Encryption */
 		TEST_CASE_ST(ut_setup, ut_teardown,
@@ -8280,15 +9211,159 @@ static struct unit_test_suite cryptodev_qat_testsuite  = {
 	}
 };
 
+static struct unit_test_suite cryptodev_virtio_testsuite = {
+	.suite_name = "Crypto VIRTIO Unit Test Suite",
+	.setup = testsuite_setup,
+	.teardown = testsuite_teardown,
+	.unit_test_cases = {
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_AES_cipheronly_virtio_all),
+
+		TEST_CASES_END() /**< NULL terminate unit test array */
+	}
+};
+
 static struct unit_test_suite cryptodev_aesni_mb_testsuite  = {
 	.suite_name = "Crypto Device AESNI MB Unit Test Suite",
 	.setup = testsuite_setup,
 	.teardown = testsuite_teardown,
 	.unit_test_cases = {
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_7),
+
+		/** AES GCM Authenticated Decryption */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_7),
+
+		/** AES GCM Authenticated Encryption 192 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_192_7),
+
+		/** AES GCM Authenticated Decryption 192 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_192_7),
+
+		/** AES GCM Authenticated Encryption 256 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_7),
+
+		/** AES GCM Authenticated Decryption 256 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_7),
+
+		/** AES GCM Authenticated Encryption big aad size */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_aad_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_aad_2),
+
+		/** AES GCM Authenticated Decryption big aad size */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_aad_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_aad_2),
+
+		/** Session-less tests */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_sessionless_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_sessionless_test_case_1),
+
+
 		TEST_CASE_ST(ut_setup, ut_teardown, test_AES_chain_mb_all),
 		TEST_CASE_ST(ut_setup, ut_teardown, test_AES_cipheronly_mb_all),
 		TEST_CASE_ST(ut_setup, ut_teardown, test_AES_docsis_mb_all),
 		TEST_CASE_ST(ut_setup, ut_teardown, test_authonly_mb_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+						test_DES_cipheronly_mb_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+						test_DES_docsis_mb_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+						test_3DES_cipheronly_mb_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_128_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_128_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_128_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_128_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_128_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_128_3),
 
 		TEST_CASES_END() /**< NULL terminate unit test array */
 	}
@@ -8310,6 +9385,8 @@ static struct unit_test_suite cryptodev_openssl_testsuite  = {
 				test_3DES_chain_openssl_all),
 		TEST_CASE_ST(ut_setup, ut_teardown,
 				test_3DES_cipheronly_openssl_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_DES_cipheronly_openssl_all),
 		TEST_CASE_ST(ut_setup, ut_teardown,
 				test_DES_docsis_openssl_all),
 		TEST_CASE_ST(ut_setup, ut_teardown,
@@ -8429,6 +9506,54 @@ static struct unit_test_suite cryptodev_openssl_testsuite  = {
 			test_AES_GMAC_authentication_test_case_4),
 		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_AES_GMAC_authentication_verify_test_case_4),
+
+		/** AES CCM Authenticated Encryption 128 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_128_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_128_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_128_3),
+
+		/** AES CCM Authenticated Decryption 128 bits key*/
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_128_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_128_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_128_3),
+
+		/** AES CCM Authenticated Encryption 192 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_192_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_192_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_192_3),
+
+		/** AES CCM Authenticated Decryption 192 bits key*/
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_192_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_192_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_192_3),
+
+		/** AES CCM Authenticated Encryption 256 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_256_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_256_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_256_3),
+
+		/** AES CCM Authenticated Decryption 256 bits key*/
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_256_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_256_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_256_3),
 
 		/** Scatter-Gather */
 		TEST_CASE_ST(ut_setup, ut_teardown,
@@ -8779,6 +9904,136 @@ static struct unit_test_suite cryptodev_sw_zuc_testsuite  = {
 	}
 };
 
+static struct unit_test_suite cryptodev_caam_jr_testsuite  = {
+	.suite_name = "Crypto CAAM JR Unit Test Suite",
+	.setup = testsuite_setup,
+	.teardown = testsuite_teardown,
+	.unit_test_cases = {
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_device_configure_invalid_dev_id),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_multi_session),
+
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_AES_chain_caam_jr_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_3DES_chain_caam_jr_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_AES_cipheronly_caam_jr_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_3DES_cipheronly_caam_jr_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_authonly_caam_jr_all),
+
+		TEST_CASES_END() /**< NULL terminate unit test array */
+	}
+};
+
+static struct unit_test_suite cryptodev_dpaa_sec_testsuite  = {
+	.suite_name = "Crypto DPAA_SEC Unit Test Suite",
+	.setup = testsuite_setup,
+	.teardown = testsuite_teardown,
+	.unit_test_cases = {
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_device_configure_invalid_dev_id),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_multi_session),
+
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_AES_chain_dpaa_sec_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_3DES_chain_dpaa_sec_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_AES_cipheronly_dpaa_sec_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_3DES_cipheronly_dpaa_sec_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			     test_authonly_dpaa_sec_all),
+
+		/** AES GCM Authenticated Encryption */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_7),
+
+		/** AES GCM Authenticated Decryption */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_7),
+
+		/** AES GCM Authenticated Encryption 256 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encryption_test_case_256_7),
+
+		/** AES GCM Authenticated Decryption 256 bits key */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_decryption_test_case_256_7),
+
+		/** Out of place tests */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_oop_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_oop_test_case_1),
+
+		/** Scatter-Gather */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encrypt_SGL_in_place_1500B),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encrypt_SGL_out_of_place_400B_400B),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encrypt_SGL_out_of_place_400B_1seg),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encrypt_SGL_out_of_place_1500B_2000B),
+
+		TEST_CASES_END() /**< NULL terminate unit test array */
+	}
+};
+
 static struct unit_test_suite cryptodev_dpaa2_sec_testsuite  = {
 	.suite_name = "Crypto DPAA2_SEC Unit Test Suite",
 	.setup = testsuite_setup,
@@ -8896,6 +10151,22 @@ static struct unit_test_suite cryptodev_dpaa2_sec_testsuite  = {
 		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_AES_GCM_auth_decryption_test_case_256_7),
 
+		/** Out of place tests */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_oop_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_oop_test_case_1),
+
+		/** Scatter-Gather */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encrypt_SGL_in_place_1500B),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encrypt_SGL_out_of_place_400B_400B),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encrypt_SGL_out_of_place_400B_1seg),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_auth_encrypt_SGL_out_of_place_1500B_2000B),
+
 		TEST_CASES_END() /**< NULL terminate unit test array */
 	}
 };
@@ -8939,6 +10210,284 @@ static struct unit_test_suite cryptodev_armv8_testsuite  = {
 	}
 };
 
+static struct unit_test_suite cryptodev_mrvl_testsuite  = {
+	.suite_name = "Crypto Device Marvell Component Test Suite",
+	.setup = testsuite_setup,
+	.teardown = testsuite_teardown,
+	.unit_test_cases = {
+		TEST_CASE_ST(ut_setup, ut_teardown, test_multi_session),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_multi_session_random_usage),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_AES_chain_mrvl_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_AES_cipheronly_mrvl_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_authonly_mrvl_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_3DES_chain_mrvl_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_3DES_cipheronly_mrvl_all),
+
+		/** Negative tests */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			authentication_verify_HMAC_SHA1_fail_data_corrupt),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			authentication_verify_HMAC_SHA1_fail_tag_corrupt),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			auth_decryption_AES128CBC_HMAC_SHA1_fail_data_corrupt),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			auth_decryption_AES128CBC_HMAC_SHA1_fail_tag_corrupt),
+
+		TEST_CASES_END() /**< NULL terminate unit test array */
+	}
+};
+
+static struct unit_test_suite cryptodev_ccp_testsuite  = {
+	.suite_name = "Crypto Device CCP Unit Test Suite",
+	.setup = testsuite_setup,
+	.teardown = testsuite_teardown,
+	.unit_test_cases = {
+		TEST_CASE_ST(ut_setup, ut_teardown, test_multi_session),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_multi_session_random_usage),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_AES_chain_ccp_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_AES_cipheronly_ccp_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_3DES_chain_ccp_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_3DES_cipheronly_ccp_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+				test_authonly_ccp_all),
+
+		/** Negative tests */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			authentication_verify_HMAC_SHA1_fail_data_corrupt),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			authentication_verify_HMAC_SHA1_fail_tag_corrupt),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			auth_decryption_AES128CBC_HMAC_SHA1_fail_data_corrupt),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			auth_decryption_AES128CBC_HMAC_SHA1_fail_tag_corrupt),
+
+		TEST_CASES_END() /**< NULL terminate unit test array */
+	}
+};
+
+static struct unit_test_suite cryptodev_octeontx_testsuite  = {
+	.suite_name = "Crypto Device OCTEONTX Unit Test Suite",
+	.setup = testsuite_setup,
+	.teardown = testsuite_teardown,
+	.unit_test_cases = {
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_chain_octeontx_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_cipheronly_octeontx_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_3DES_chain_octeontx_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_3DES_cipheronly_octeontx_all),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_authonly_octeontx_all),
+
+		/** AES GCM Authenticated Encryption */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_encryption_test_case_7),
+
+		/** AES GCM Authenticated Decryption */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GCM_authenticated_decryption_test_case_7),
+		/** AES GMAC Authentication */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GMAC_authentication_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GMAC_authentication_verify_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GMAC_authentication_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GMAC_authentication_verify_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GMAC_authentication_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_GMAC_authentication_verify_test_case_3),
+
+		/** SNOW 3G encrypt only (UEA2) */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_encryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_encryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_encryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_encryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_encryption_test_case_5),
+
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_encryption_test_case_1_oop),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_decryption_test_case_1_oop),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_encryption_test_case_1_oop_sgl),
+
+		/** SNOW 3G decrypt only (UEA2) */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_decryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_decryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_decryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_decryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_decryption_test_case_5),
+
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_hash_generate_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_hash_generate_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_hash_generate_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_hash_verify_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_hash_verify_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_snow3g_hash_verify_test_case_3),
+
+		/** ZUC encrypt only (EEA3) */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_zuc_encryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_zuc_encryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_zuc_encryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_zuc_encryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_zuc_encryption_test_case_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_zuc_hash_generate_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_zuc_hash_generate_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_zuc_hash_generate_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_zuc_hash_generate_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_zuc_hash_generate_test_case_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_zuc_encryption_test_case_6_sgl),
+
+		/** KASUMI encrypt only (UEA1) */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_encryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_encryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_encryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_encryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_encryption_test_case_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_encryption_test_case_1_sgl),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_encryption_test_case_1_oop_sgl),
+		/** KASUMI decrypt only (UEA1) */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_decryption_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_decryption_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_decryption_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_decryption_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_decryption_test_case_5),
+
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_encryption_test_case_1_oop),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_decryption_test_case_1_oop),
+
+		/** KASUMI hash only (UIA1) */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_hash_generate_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_hash_generate_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_hash_generate_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_hash_generate_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_hash_generate_test_case_5),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_hash_generate_test_case_6),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_hash_verify_test_case_1),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_hash_verify_test_case_2),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_hash_verify_test_case_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_hash_verify_test_case_4),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_kasumi_hash_verify_test_case_5),
+
+		/** NULL tests */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_null_cipher_only_operation),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_null_auth_only_operation),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_null_cipher_auth_operation),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_null_auth_cipher_operation),
+
+		/** Negative tests */
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			authentication_verify_HMAC_SHA1_fail_data_corrupt),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			authentication_verify_HMAC_SHA1_fail_tag_corrupt),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			authentication_verify_AES128_GMAC_fail_data_corrupt),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			authentication_verify_AES128_GMAC_fail_tag_corrupt),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			auth_decryption_AES128CBC_HMAC_SHA1_fail_data_corrupt),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			auth_decryption_AES128CBC_HMAC_SHA1_fail_tag_corrupt),
+		TEST_CASES_END() /**< NULL terminate unit test array */
+	}
+};
+
 static int
 test_cryptodev_qat(void /*argv __rte_unused, int argc __rte_unused*/)
 {
@@ -8946,13 +10495,29 @@ test_cryptodev_qat(void /*argv __rte_unused, int argc __rte_unused*/)
 			RTE_STR(CRYPTODEV_NAME_QAT_SYM_PMD));
 
 	if (gbl_driver_id == -1) {
-		RTE_LOG(ERR, USER1, "QAT PMD must be loaded. Check if "
-				"CONFIG_RTE_LIBRTE_PMD_QAT is enabled "
+		RTE_LOG(ERR, USER1, "QAT PMD must be loaded. Check that both "
+		"CONFIG_RTE_LIBRTE_PMD_QAT and CONFIG_RTE_LIBRTE_PMD_QAT_SYM "
+		"are enabled in config file to run this testsuite.\n");
+		return TEST_SKIPPED;
+	}
+
+	return unit_test_suite_runner(&cryptodev_qat_testsuite);
+}
+
+static int
+test_cryptodev_virtio(void /*argv __rte_unused, int argc __rte_unused*/)
+{
+	gbl_driver_id =	rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_VIRTIO_PMD));
+
+	if (gbl_driver_id == -1) {
+		RTE_LOG(ERR, USER1, "VIRTIO PMD must be loaded. Check if "
+				"CONFIG_RTE_LIBRTE_PMD_VIRTIO_CRYPTO is enabled "
 				"in config file to run this testsuite.\n");
 		return TEST_FAILED;
 	}
 
-	return unit_test_suite_runner(&cryptodev_qat_testsuite);
+	return unit_test_suite_runner(&cryptodev_virtio_testsuite);
 }
 
 static int
@@ -8965,7 +10530,7 @@ test_cryptodev_aesni_mb(void /*argv __rte_unused, int argc __rte_unused*/)
 		RTE_LOG(ERR, USER1, "AESNI MB PMD must be loaded. Check if "
 				"CONFIG_RTE_LIBRTE_PMD_AESNI_MB is enabled "
 				"in config file to run this testsuite.\n");
-		return TEST_FAILED;
+		return TEST_SKIPPED;
 	}
 
 	return unit_test_suite_runner(&cryptodev_aesni_mb_testsuite);
@@ -8981,7 +10546,7 @@ test_cryptodev_openssl(void)
 		RTE_LOG(ERR, USER1, "OPENSSL PMD must be loaded. Check if "
 				"CONFIG_RTE_LIBRTE_PMD_OPENSSL is enabled "
 				"in config file to run this testsuite.\n");
-		return TEST_FAILED;
+		return TEST_SKIPPED;
 	}
 
 	return unit_test_suite_runner(&cryptodev_openssl_testsuite);
@@ -8997,7 +10562,7 @@ test_cryptodev_aesni_gcm(void)
 		RTE_LOG(ERR, USER1, "AESNI GCM PMD must be loaded. Check if "
 				"CONFIG_RTE_LIBRTE_PMD_AESNI_GCM is enabled "
 				"in config file to run this testsuite.\n");
-		return TEST_FAILED;
+		return TEST_SKIPPED;
 	}
 
 	return unit_test_suite_runner(&cryptodev_aesni_gcm_testsuite);
@@ -9013,7 +10578,7 @@ test_cryptodev_null(void)
 		RTE_LOG(ERR, USER1, "NULL PMD must be loaded. Check if "
 				"CONFIG_RTE_LIBRTE_PMD_NULL is enabled "
 				"in config file to run this testsuite.\n");
-		return TEST_FAILED;
+		return TEST_SKIPPED;
 	}
 
 	return unit_test_suite_runner(&cryptodev_null_testsuite);
@@ -9029,7 +10594,7 @@ test_cryptodev_sw_snow3g(void /*argv __rte_unused, int argc __rte_unused*/)
 		RTE_LOG(ERR, USER1, "SNOW3G PMD must be loaded. Check if "
 				"CONFIG_RTE_LIBRTE_PMD_SNOW3G is enabled "
 				"in config file to run this testsuite.\n");
-		return TEST_FAILED;
+		return TEST_SKIPPED;
 	}
 
 	return unit_test_suite_runner(&cryptodev_sw_snow3g_testsuite);
@@ -9045,7 +10610,7 @@ test_cryptodev_sw_kasumi(void /*argv __rte_unused, int argc __rte_unused*/)
 		RTE_LOG(ERR, USER1, "ZUC PMD must be loaded. Check if "
 				"CONFIG_RTE_LIBRTE_PMD_KASUMI is enabled "
 				"in config file to run this testsuite.\n");
-		return TEST_FAILED;
+		return TEST_SKIPPED;
 	}
 
 	return unit_test_suite_runner(&cryptodev_sw_kasumi_testsuite);
@@ -9061,7 +10626,7 @@ test_cryptodev_sw_zuc(void /*argv __rte_unused, int argc __rte_unused*/)
 		RTE_LOG(ERR, USER1, "ZUC PMD must be loaded. Check if "
 				"CONFIG_RTE_LIBRTE_PMD_ZUC is enabled "
 				"in config file to run this testsuite.\n");
-		return TEST_FAILED;
+		return TEST_SKIPPED;
 	}
 
 	return unit_test_suite_runner(&cryptodev_sw_zuc_testsuite);
@@ -9077,10 +10642,26 @@ test_cryptodev_armv8(void)
 		RTE_LOG(ERR, USER1, "ARMV8 PMD must be loaded. Check if "
 				"CONFIG_RTE_LIBRTE_PMD_ARMV8 is enabled "
 				"in config file to run this testsuite.\n");
-		return TEST_FAILED;
+		return TEST_SKIPPED;
 	}
 
 	return unit_test_suite_runner(&cryptodev_armv8_testsuite);
+}
+
+static int
+test_cryptodev_mrvl(void)
+{
+	gbl_driver_id = rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_MVSAM_PMD));
+
+	if (gbl_driver_id == -1) {
+		RTE_LOG(ERR, USER1, "MVSAM PMD must be loaded. Check if "
+				"CONFIG_RTE_LIBRTE_PMD_MVSAM_CRYPTO is enabled "
+				"in config file to run this testsuite.\n");
+		return TEST_SKIPPED;
+	}
+
+	return unit_test_suite_runner(&cryptodev_mrvl_testsuite);
 }
 
 #ifdef RTE_LIBRTE_PMD_CRYPTO_SCHEDULER
@@ -9095,14 +10676,14 @@ test_cryptodev_scheduler(void /*argv __rte_unused, int argc __rte_unused*/)
 		RTE_LOG(ERR, USER1, "SCHEDULER PMD must be loaded. Check if "
 				"CONFIG_RTE_LIBRTE_PMD_SCHEDULER is enabled "
 				"in config file to run this testsuite.\n");
-		return TEST_FAILED;
+		return TEST_SKIPPED;
 	}
 
 	if (rte_cryptodev_driver_id_get(
 				RTE_STR(CRYPTODEV_NAME_AESNI_MB_PMD)) == -1) {
 		RTE_LOG(ERR, USER1, "CONFIG_RTE_LIBRTE_PMD_AESNI_MB must be"
 			" enabled in config file to run this testsuite.\n");
-		return TEST_FAILED;
+		return TEST_SKIPPED;
 }
 	return unit_test_suite_runner(&cryptodev_scheduler_testsuite);
 }
@@ -9121,10 +10702,73 @@ test_cryptodev_dpaa2_sec(void /*argv __rte_unused, int argc __rte_unused*/)
 		RTE_LOG(ERR, USER1, "DPAA2 SEC PMD must be loaded. Check if "
 				"CONFIG_RTE_LIBRTE_PMD_DPAA2_SEC is enabled "
 				"in config file to run this testsuite.\n");
-		return TEST_FAILED;
+		return TEST_SKIPPED;
 	}
 
 	return unit_test_suite_runner(&cryptodev_dpaa2_sec_testsuite);
+}
+
+static int
+test_cryptodev_dpaa_sec(void /*argv __rte_unused, int argc __rte_unused*/)
+{
+	gbl_driver_id =	rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_DPAA_SEC_PMD));
+
+	if (gbl_driver_id == -1) {
+		RTE_LOG(ERR, USER1, "DPAA SEC PMD must be loaded. Check if "
+				"CONFIG_RTE_LIBRTE_PMD_DPAA_SEC is enabled "
+				"in config file to run this testsuite.\n");
+		return TEST_SKIPPED;
+	}
+
+	return unit_test_suite_runner(&cryptodev_dpaa_sec_testsuite);
+}
+
+static int
+test_cryptodev_ccp(void)
+{
+	gbl_driver_id = rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_CCP_PMD));
+
+	if (gbl_driver_id == -1) {
+		RTE_LOG(ERR, USER1, "CCP PMD must be loaded. Check if "
+				"CONFIG_RTE_LIBRTE_PMD_CCP is enabled "
+				"in config file to run this testsuite.\n");
+		return TEST_FAILED;
+	}
+
+	return unit_test_suite_runner(&cryptodev_ccp_testsuite);
+}
+
+static int
+test_cryptodev_octeontx(void)
+{
+	gbl_driver_id =	rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_OCTEONTX_SYM_PMD));
+	if (gbl_driver_id == -1) {
+		RTE_LOG(ERR, USER1, "OCTEONTX PMD must be loaded. Check if "
+				"CONFIG_RTE_LIBRTE_PMD_OCTEONTX_CRYPTO is "
+				"enabled in config file to run this "
+				"testsuite.\n");
+		return TEST_FAILED;
+	}
+	return unit_test_suite_runner(&cryptodev_octeontx_testsuite);
+}
+
+static int
+test_cryptodev_caam_jr(void /*argv __rte_unused, int argc __rte_unused*/)
+{
+	gbl_driver_id =	rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_CAAM_JR_PMD));
+
+	if (gbl_driver_id == -1) {
+		RTE_LOG(ERR, USER1, "CAAM_JR PMD must be loaded. Check if "
+				"CONFIG_RTE_LIBRTE_PMD_CAAM_JR is enabled "
+				"in config file to run this testsuite.\n");
+		return TEST_FAILED;
+	}
+
+	return unit_test_suite_runner(&cryptodev_caam_jr_testsuite);
 }
 
 REGISTER_TEST_COMMAND(cryptodev_qat_autotest, test_cryptodev_qat);
@@ -9136,4 +10780,10 @@ REGISTER_TEST_COMMAND(cryptodev_sw_snow3g_autotest, test_cryptodev_sw_snow3g);
 REGISTER_TEST_COMMAND(cryptodev_sw_kasumi_autotest, test_cryptodev_sw_kasumi);
 REGISTER_TEST_COMMAND(cryptodev_sw_zuc_autotest, test_cryptodev_sw_zuc);
 REGISTER_TEST_COMMAND(cryptodev_sw_armv8_autotest, test_cryptodev_armv8);
+REGISTER_TEST_COMMAND(cryptodev_sw_mvsam_autotest, test_cryptodev_mrvl);
 REGISTER_TEST_COMMAND(cryptodev_dpaa2_sec_autotest, test_cryptodev_dpaa2_sec);
+REGISTER_TEST_COMMAND(cryptodev_dpaa_sec_autotest, test_cryptodev_dpaa_sec);
+REGISTER_TEST_COMMAND(cryptodev_ccp_autotest, test_cryptodev_ccp);
+REGISTER_TEST_COMMAND(cryptodev_virtio_autotest, test_cryptodev_virtio);
+REGISTER_TEST_COMMAND(cryptodev_octeontx_autotest, test_cryptodev_octeontx);
+REGISTER_TEST_COMMAND(cryptodev_caam_jr_autotest, test_cryptodev_caam_jr);

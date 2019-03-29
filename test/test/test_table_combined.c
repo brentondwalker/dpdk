@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2016 Intel Corporation
  */
 
 #include <string.h>
@@ -441,12 +412,15 @@ test_table_hash8lru(void)
 	int status, i;
 
 	/* Traffic flow */
-	struct rte_table_hash_key8_lru_params key8lru_params = {
-		.n_entries = 1<<24,
-		.f_hash = pipeline_test_hash,
-		.signature_offset = APP_METADATA_OFFSET(0),
+	struct rte_table_hash_params key8lru_params = {
+		.name = "TABLE",
+		.key_size = 8,
 		.key_offset = APP_METADATA_OFFSET(32),
 		.key_mask = NULL,
+		.n_keys = 1 << 16,
+		.n_buckets = 1 << 16,
+		.f_hash = pipeline_test_hash,
+		.seed = 0,
 	};
 
 	uint8_t key8lru[8];
@@ -475,14 +449,14 @@ test_table_hash8lru(void)
 	VERIFY(status, CHECK_TABLE_OK);
 
 	/* Invalid parameters */
-	key8lru_params.n_entries = 0;
+	key8lru_params.n_keys = 0;
 
 	status = test_table_type(&rte_table_hash_key8_lru_ops,
 		(void *)&key8lru_params, (void *)key8lru, &table_packets,
 			NULL, 0);
 	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
 
-	key8lru_params.n_entries = 1<<16;
+	key8lru_params.n_keys = 1<<16;
 	key8lru_params.f_hash = NULL;
 
 	status = test_table_type(&rte_table_hash_key8_lru_ops,
@@ -499,13 +473,15 @@ test_table_hash16lru(void)
 	int status, i;
 
 	/* Traffic flow */
-	struct rte_table_hash_key16_lru_params key16lru_params = {
-		.n_entries = 1<<16,
-		.f_hash = pipeline_test_hash,
-		.seed = 0,
-		.signature_offset = APP_METADATA_OFFSET(0),
+	struct rte_table_hash_params key16lru_params = {
+		.name = "TABLE",
+		.key_size = 16,
 		.key_offset = APP_METADATA_OFFSET(32),
 		.key_mask = NULL,
+		.n_keys = 1 << 16,
+		.n_buckets = 1 << 16,
+		.f_hash = pipeline_test_hash,
+		.seed = 0,
 	};
 
 	uint8_t key16lru[16];
@@ -534,14 +510,14 @@ test_table_hash16lru(void)
 	VERIFY(status, CHECK_TABLE_OK);
 
 	/* Invalid parameters */
-	key16lru_params.n_entries = 0;
+	key16lru_params.n_keys = 0;
 
 	status = test_table_type(&rte_table_hash_key16_lru_ops,
 		(void *)&key16lru_params, (void *)key16lru, &table_packets,
 			NULL, 0);
 	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
 
-	key16lru_params.n_entries = 1<<16;
+	key16lru_params.n_keys = 1<<16;
 	key16lru_params.f_hash = NULL;
 
 	status = test_table_type(&rte_table_hash_key16_lru_ops,
@@ -558,12 +534,15 @@ test_table_hash32lru(void)
 	int status, i;
 
 	/* Traffic flow */
-	struct rte_table_hash_key32_lru_params key32lru_params = {
-		.n_entries = 1<<16,
+	struct rte_table_hash_params key32lru_params = {
+		.name = "TABLE",
+		.key_size = 32,
+		.key_offset = APP_METADATA_OFFSET(32),
+		.key_mask = NULL,
+		.n_keys = 1 << 16,
+		.n_buckets = 1 << 16,
 		.f_hash = pipeline_test_hash,
 		.seed = 0,
-		.signature_offset = APP_METADATA_OFFSET(0),
-		.key_offset = APP_METADATA_OFFSET(32),
 	};
 
 	uint8_t key32lru[32];
@@ -592,14 +571,14 @@ test_table_hash32lru(void)
 	VERIFY(status, CHECK_TABLE_OK);
 
 	/* Invalid parameters */
-	key32lru_params.n_entries = 0;
+	key32lru_params.n_keys = 0;
 
 	status = test_table_type(&rte_table_hash_key32_lru_ops,
 		(void *)&key32lru_params, (void *)key32lru, &table_packets,
 		NULL, 0);
 	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
 
-	key32lru_params.n_entries = 1<<16;
+	key32lru_params.n_keys = 1<<16;
 	key32lru_params.f_hash = NULL;
 
 	status = test_table_type(&rte_table_hash_key32_lru_ops,
@@ -616,14 +595,15 @@ test_table_hash8ext(void)
 	int status, i;
 
 	/* Traffic flow */
-	struct rte_table_hash_key8_ext_params key8ext_params = {
-		.n_entries = 1<<16,
-		.n_entries_ext = 1<<15,
-		.f_hash = pipeline_test_hash,
-		.seed = 0,
-		.signature_offset = APP_METADATA_OFFSET(0),
+	struct rte_table_hash_params key8ext_params = {
+		.name = "TABLE",
+		.key_size = 8,
 		.key_offset = APP_METADATA_OFFSET(32),
 		.key_mask = NULL,
+		.n_keys = 1 << 16,
+		.n_buckets = 1 << 16,
+		.f_hash = pipeline_test_hash,
+		.seed = 0,
 	};
 
 	uint8_t key8ext[8];
@@ -652,26 +632,19 @@ test_table_hash8ext(void)
 	VERIFY(status, CHECK_TABLE_OK);
 
 	/* Invalid parameters */
-	key8ext_params.n_entries = 0;
+	key8ext_params.n_keys = 0;
 
 	status = test_table_type(&rte_table_hash_key8_ext_ops,
 		(void *)&key8ext_params, (void *)key8ext, &table_packets,
 		NULL, 0);
 	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
 
-	key8ext_params.n_entries = 1<<16;
+	key8ext_params.n_keys = 1<<16;
 	key8ext_params.f_hash = NULL;
 
 	status = test_table_type(&rte_table_hash_key8_ext_ops,
 		(void *)&key8ext_params, (void *)key8ext, &table_packets,
 		NULL, 0);
-	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
-
-	key8ext_params.f_hash = pipeline_test_hash;
-	key8ext_params.n_entries_ext = 0;
-
-	status = test_table_type(&rte_table_hash_key8_ext_ops,
-	(void *)&key8ext_params, (void *)key8ext, &table_packets, NULL, 0);
 	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
 
 	return 0;
@@ -683,14 +656,15 @@ test_table_hash16ext(void)
 	int status, i;
 
 	/* Traffic flow */
-	struct rte_table_hash_key16_ext_params key16ext_params = {
-		.n_entries = 1<<16,
-		.n_entries_ext = 1<<15,
-		.f_hash = pipeline_test_hash,
-		.seed = 0,
-		.signature_offset = APP_METADATA_OFFSET(0),
+	struct rte_table_hash_params key16ext_params = {
+		.name = "TABLE",
+		.key_size = 16,
 		.key_offset = APP_METADATA_OFFSET(32),
 		.key_mask = NULL,
+		.n_keys = 1 << 16,
+		.n_buckets = 1 << 16,
+		.f_hash = pipeline_test_hash,
+		.seed = 0,
 	};
 
 	uint8_t key16ext[16];
@@ -719,26 +693,19 @@ test_table_hash16ext(void)
 	VERIFY(status, CHECK_TABLE_OK);
 
 	/* Invalid parameters */
-	key16ext_params.n_entries = 0;
+	key16ext_params.n_keys = 0;
 
 	status = test_table_type(&rte_table_hash_key16_ext_ops,
 		(void *)&key16ext_params, (void *)key16ext, &table_packets,
 		NULL, 0);
 	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
 
-	key16ext_params.n_entries = 1<<16;
+	key16ext_params.n_keys = 1<<16;
 	key16ext_params.f_hash = NULL;
 
 	status = test_table_type(&rte_table_hash_key16_ext_ops,
 		(void *)&key16ext_params, (void *)key16ext, &table_packets,
 		NULL, 0);
-	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
-
-	key16ext_params.f_hash = pipeline_test_hash;
-	key16ext_params.n_entries_ext = 0;
-
-	status = test_table_type(&rte_table_hash_key16_ext_ops,
-	(void *)&key16ext_params, (void *)key16ext, &table_packets, NULL, 0);
 	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
 
 	return 0;
@@ -750,13 +717,15 @@ test_table_hash32ext(void)
 	int status, i;
 
 	/* Traffic flow */
-	struct rte_table_hash_key32_ext_params key32ext_params = {
-		.n_entries = 1<<16,
-		.n_entries_ext = 1<<15,
+	struct rte_table_hash_params key32ext_params = {
+		.name = "TABLE",
+		.key_size = 32,
+		.key_offset = APP_METADATA_OFFSET(32),
+		.key_mask = NULL,
+		.n_keys = 1 << 16,
+		.n_buckets = 1 << 16,
 		.f_hash = pipeline_test_hash,
 		.seed = 0,
-		.signature_offset = APP_METADATA_OFFSET(0),
-		.key_offset = APP_METADATA_OFFSET(32),
 	};
 
 	uint8_t key32ext[32];
@@ -785,23 +754,15 @@ test_table_hash32ext(void)
 	VERIFY(status, CHECK_TABLE_OK);
 
 	/* Invalid parameters */
-	key32ext_params.n_entries = 0;
+	key32ext_params.n_keys = 0;
 
 	status = test_table_type(&rte_table_hash_key32_ext_ops,
 		(void *)&key32ext_params, (void *)key32ext, &table_packets,
 		NULL, 0);
 	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
 
-	key32ext_params.n_entries = 1<<16;
+	key32ext_params.n_keys = 1<<16;
 	key32ext_params.f_hash = NULL;
-
-	status = test_table_type(&rte_table_hash_key32_ext_ops,
-		(void *)&key32ext_params, (void *)key32ext, &table_packets,
-		NULL, 0);
-	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
-
-	key32ext_params.f_hash = pipeline_test_hash;
-	key32ext_params.n_entries_ext = 0;
 
 	status = test_table_type(&rte_table_hash_key32_ext_ops,
 		(void *)&key32ext_params, (void *)key32ext, &table_packets,
@@ -818,13 +779,14 @@ test_table_hash_cuckoo_combined(void)
 
 	/* Traffic flow */
 	struct rte_table_hash_cuckoo_params cuckoo_params = {
+		.name = "TABLE",
 		.key_size = 32,
-		.n_keys = 1<<16,
-		.f_hash = pipeline_test_hash,
-		.seed = 0,
-		.signature_offset = APP_METADATA_OFFSET(0),
 		.key_offset = APP_METADATA_OFFSET(32),
-		.name = "CUCKOO_HASH",
+		.key_mask = NULL,
+		.n_keys = 1 << 16,
+		.n_buckets = 1 << 16,
+		.f_hash = pipeline_test_hash_cuckoo,
+		.seed = 0,
 	};
 
 	uint8_t key_cuckoo[32];
@@ -847,7 +809,7 @@ test_table_hash_cuckoo_combined(void)
 	table_packets.n_hit_packets = 50;
 	table_packets.n_miss_packets = 50;
 
-	status = test_table_type(&rte_table_hash_cuckoo_dosig_ops,
+	status = test_table_type(&rte_table_hash_cuckoo_ops,
 		(void *)&cuckoo_params, (void *)key_cuckoo, &table_packets,
 		NULL, 0);
 	VERIFY(status, CHECK_TABLE_OK);
@@ -855,7 +817,7 @@ test_table_hash_cuckoo_combined(void)
 	/* Invalid parameters */
 	cuckoo_params.key_size = 0;
 
-	status = test_table_type(&rte_table_hash_cuckoo_dosig_ops,
+	status = test_table_type(&rte_table_hash_cuckoo_ops,
 		(void *)&cuckoo_params, (void *)key_cuckoo, &table_packets,
 		NULL, 0);
 	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
@@ -863,7 +825,7 @@ test_table_hash_cuckoo_combined(void)
 	cuckoo_params.key_size = 32;
 	cuckoo_params.n_keys = 0;
 
-	status = test_table_type(&rte_table_hash_cuckoo_dosig_ops,
+	status = test_table_type(&rte_table_hash_cuckoo_ops,
 		(void *)&cuckoo_params, (void *)key_cuckoo, &table_packets,
 		NULL, 0);
 	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);
@@ -871,7 +833,7 @@ test_table_hash_cuckoo_combined(void)
 	cuckoo_params.n_keys = 1<<16;
 	cuckoo_params.f_hash = NULL;
 
-	status = test_table_type(&rte_table_hash_cuckoo_dosig_ops,
+	status = test_table_type(&rte_table_hash_cuckoo_ops,
 		(void *)&cuckoo_params, (void *)key_cuckoo, &table_packets,
 		NULL, 0);
 	VERIFY(status, CHECK_TABLE_TABLE_CONFIG);

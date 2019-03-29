@@ -1,33 +1,5 @@
-/*
- *   BSD LICENSE
- *
- * Copyright (c) 2013-2017, Wind River Systems, Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1) Redistributions of source code must retain the above copyright notice,
- * this list of conditions and the following disclaimer.
- *
- * 2) Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3) Neither the name of Wind River Systems nor the names of its contributors
- * may be used to endorse or promote products derived from this software
- * without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2013-2017 Wind River Systems, Inc.
  */
 
 #include <stdint.h>
@@ -36,15 +8,15 @@
 #include <errno.h>
 #include <unistd.h>
 
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_ethdev_pci.h>
 #include <rte_memcpy.h>
 #include <rte_string_fns.h>
-#include <rte_memzone.h>
 #include <rte_malloc.h>
 #include <rte_atomic.h>
 #include <rte_branch_prediction.h>
 #include <rte_pci.h>
+#include <rte_bus_pci.h>
 #include <rte_ether.h>
 #include <rte_common.h>
 #include <rte_cycles.h>
@@ -60,6 +32,7 @@
 
 #include "avp_logs.h"
 
+int avp_logtype_driver;
 
 static int avp_dev_create(struct rte_pci_device *pci_dev,
 			  struct rte_eth_dev *eth_dev);
@@ -70,7 +43,7 @@ static void avp_dev_stop(struct rte_eth_dev *dev);
 static void avp_dev_close(struct rte_eth_dev *dev);
 static void avp_dev_info_get(struct rte_eth_dev *dev,
 			     struct rte_eth_dev_info *dev_info);
-static void avp_vlan_offload_set(struct rte_eth_dev *dev, int mask);
+static int avp_vlan_offload_set(struct rte_eth_dev *dev, int mask);
 static int avp_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete);
 static void avp_dev_promiscuous_enable(struct rte_eth_dev *dev);
 static void avp_dev_promiscuous_disable(struct rte_eth_dev *dev);
@@ -107,7 +80,7 @@ static uint16_t avp_xmit_pkts(void *tx_queue,
 static void avp_dev_rx_queue_release(void *rxq);
 static void avp_dev_tx_queue_release(void *txq);
 
-static void avp_dev_stats_get(struct rte_eth_dev *dev,
+static int avp_dev_stats_get(struct rte_eth_dev *dev,
 			      struct rte_eth_stats *stats);
 static void avp_dev_stats_reset(struct rte_eth_dev *dev);
 
@@ -190,7 +163,7 @@ struct avp_dev {
 	struct rte_eth_dev_data *dev_data;
 	/**< Back pointer to ethernet device data */
 	volatile uint32_t flags; /**< Device operational flags */
-	uint8_t port_id; /**< Ethernet port identifier */
+	uint16_t port_id; /**< Ethernet port identifier */
 	struct rte_mempool *pool; /**< pkt mbuf mempool */
 	unsigned int guest_mbuf_size; /**< local pool mbuf size */
 	unsigned int host_mbuf_size; /**< host mbuf size */
@@ -387,7 +360,7 @@ avp_dev_translate_buffer(struct avp_dev *avp, void *host_mbuf_address)
 /* translate from host physical address to guest virtual address */
 static void *
 avp_dev_translate_address(struct rte_eth_dev *eth_dev,
-			  phys_addr_t host_phys_addr)
+			  rte_iova_t host_phys_addr)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	struct rte_mem_resource *resource;
@@ -410,7 +383,7 @@ avp_dev_translate_address(struct rte_eth_dev *eth_dev,
 			(host_phys_addr < (map->phys_addr + map->length))) {
 			/* address is within this segment */
 			offset += (host_phys_addr - map->phys_addr);
-			addr = RTE_PTR_ADD(addr, offset);
+			addr = RTE_PTR_ADD(addr, (uintptr_t)offset);
 
 			PMD_DRV_LOG(DEBUG, "Translating host physical 0x%" PRIx64 " to guest virtual 0x%p\n",
 				    host_phys_addr, addr);
@@ -1004,8 +977,6 @@ eth_avp_dev_init(struct rte_eth_dev *eth_dev)
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
 
-	eth_dev->data->dev_flags |= RTE_ETH_DEV_DETACHABLE;
-
 	/* Check current migration status */
 	if (avp_dev_migration_pending(eth_dev)) {
 		PMD_DRV_LOG(ERR, "VM live migration operation in progress\n");
@@ -1065,11 +1036,6 @@ eth_avp_dev_uninit(struct rte_eth_dev *eth_dev)
 		return ret;
 	}
 
-	if (eth_dev->data->mac_addrs != NULL) {
-		rte_free(eth_dev->data->mac_addrs);
-		eth_dev->data->mac_addrs = NULL;
-	}
-
 	return 0;
 }
 
@@ -1077,19 +1043,8 @@ static int
 eth_avp_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		  struct rte_pci_device *pci_dev)
 {
-	struct rte_eth_dev *eth_dev;
-	int ret;
-
-	eth_dev = rte_eth_dev_pci_allocate(pci_dev,
-					   sizeof(struct avp_adapter));
-	if (eth_dev == NULL)
-		return -ENOMEM;
-
-	ret = eth_avp_dev_init(eth_dev);
-	if (ret)
-		rte_eth_dev_pci_release(eth_dev);
-
-	return ret;
+	return rte_eth_dev_pci_generic_probe(pci_dev, sizeof(struct avp_adapter),
+			eth_avp_dev_init);
 }
 
 static int
@@ -1361,7 +1316,7 @@ avp_dev_copy_from_buffers(struct avp_dev *avp,
 	src_offset = 0;
 
 	if (pkt_buf->ol_flags & RTE_AVP_RX_VLAN_PKT) {
-		ol_flags = PKT_RX_VLAN_PKT;
+		ol_flags = PKT_RX_VLAN;
 		vlan_tci = pkt_buf->vlan_tci;
 	} else {
 		ol_flags = 0;
@@ -1619,7 +1574,7 @@ avp_recv_pkts(void *rx_queue,
 		m->port = avp->port_id;
 
 		if (pkt_buf->ol_flags & RTE_AVP_RX_VLAN_PKT) {
-			m->ol_flags = PKT_RX_VLAN_PKT;
+			m->ol_flags = PKT_RX_VLAN;
 			m->vlan_tci = pkt_buf->vlan_tci;
 		}
 
@@ -2031,7 +1986,12 @@ avp_dev_configure(struct rte_eth_dev *eth_dev)
 	mask = (ETH_VLAN_STRIP_MASK |
 		ETH_VLAN_FILTER_MASK |
 		ETH_VLAN_EXTEND_MASK);
-	avp_vlan_offload_set(eth_dev, mask);
+	ret = avp_vlan_offload_set(eth_dev, mask);
+	if (ret < 0) {
+		PMD_DRV_LOG(ERR, "VLAN offload set failed by host, ret=%d\n",
+			    ret);
+		goto unlock;
+	}
 
 	/* update device config */
 	memset(&config, 0, sizeof(config));
@@ -2069,12 +2029,6 @@ avp_dev_start(struct rte_eth_dev *eth_dev)
 		ret = -ENOTSUP;
 		goto unlock;
 	}
-
-	/* disable features that we do not support */
-	eth_dev->data->dev_conf.rxmode.hw_ip_checksum = 0;
-	eth_dev->data->dev_conf.rxmode.hw_vlan_filter = 0;
-	eth_dev->data->dev_conf.rxmode.hw_vlan_extend = 0;
-	eth_dev->data->dev_conf.rxmode.hw_strip_crc = 0;
 
 	/* update link state */
 	ret = avp_dev_ctrl_set_link_state(eth_dev, 1);
@@ -2202,7 +2156,6 @@ avp_dev_info_get(struct rte_eth_dev *eth_dev,
 {
 	struct avp_dev *avp = AVP_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 
-	dev_info->pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	dev_info->max_rx_queues = avp->max_rx_queues;
 	dev_info->max_tx_queues = avp->max_tx_queues;
 	dev_info->min_rx_bufsize = AVP_MIN_RX_BUFSIZE;
@@ -2214,14 +2167,16 @@ avp_dev_info_get(struct rte_eth_dev *eth_dev,
 	}
 }
 
-static void
+static int
 avp_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
 {
 	struct avp_dev *avp = AVP_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
+	struct rte_eth_conf *dev_conf = &eth_dev->data->dev_conf;
+	uint64_t offloads = dev_conf->rxmode.offloads;
 
 	if (mask & ETH_VLAN_STRIP_MASK) {
 		if (avp->host_features & RTE_AVP_FEATURE_VLAN_OFFLOAD) {
-			if (eth_dev->data->dev_conf.rxmode.hw_vlan_strip)
+			if (offloads & DEV_RX_OFFLOAD_VLAN_STRIP)
 				avp->features |= RTE_AVP_FEATURE_VLAN_OFFLOAD;
 			else
 				avp->features &= ~RTE_AVP_FEATURE_VLAN_OFFLOAD;
@@ -2231,17 +2186,19 @@ avp_vlan_offload_set(struct rte_eth_dev *eth_dev, int mask)
 	}
 
 	if (mask & ETH_VLAN_FILTER_MASK) {
-		if (eth_dev->data->dev_conf.rxmode.hw_vlan_filter)
+		if (offloads & DEV_RX_OFFLOAD_VLAN_FILTER)
 			PMD_DRV_LOG(ERR, "VLAN filter offload not supported\n");
 	}
 
 	if (mask & ETH_VLAN_EXTEND_MASK) {
-		if (eth_dev->data->dev_conf.rxmode.hw_vlan_extend)
+		if (offloads & DEV_RX_OFFLOAD_VLAN_EXTEND)
 			PMD_DRV_LOG(ERR, "VLAN extend offload not supported\n");
 	}
+
+	return 0;
 }
 
-static void
+static int
 avp_dev_stats_get(struct rte_eth_dev *eth_dev, struct rte_eth_stats *stats)
 {
 	struct avp_dev *avp = AVP_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
@@ -2274,6 +2231,8 @@ avp_dev_stats_get(struct rte_eth_dev *eth_dev, struct rte_eth_stats *stats)
 			stats->q_errors[i] += txq->errors;
 		}
 	}
+
+	return 0;
 }
 
 static void
@@ -2305,3 +2264,10 @@ avp_dev_stats_reset(struct rte_eth_dev *eth_dev)
 
 RTE_PMD_REGISTER_PCI(net_avp, rte_avp_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_avp, pci_id_avp_map);
+
+RTE_INIT(avp_init_log)
+{
+	avp_logtype_driver = rte_log_register("pmd.net.avp.driver");
+	if (avp_logtype_driver >= 0)
+		rte_log_set_level(avp_logtype_driver, RTE_LOG_NOTICE);
+}

@@ -1,33 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016-2017 Intel Corporation
  */
 #ifdef RTE_EXEC_ENV_BSDAPP
 	#define _WITH_GETLINE
@@ -116,6 +88,20 @@ show_test_vector(struct cperf_test_vector *test_vector)
 		printf("\n");
 	}
 
+	if (test_vector->aead_key.data) {
+		printf("\naead_key =\n");
+		for (i = 0; i < test_vector->aead_key.length; ++i) {
+			if ((i % wrap == 0) && (i != 0))
+				printf("\n");
+			if (i == (uint32_t)(test_vector->aead_key.length - 1))
+				printf("0x%02x", test_vector->aead_key.data[i]);
+			else
+				printf("0x%02x, ",
+					test_vector->aead_key.data[i]);
+		}
+		printf("\n");
+	}
+
 	if (test_vector->cipher_iv.data) {
 		printf("\ncipher_iv =\n");
 		for (i = 0; i < test_vector->cipher_iv.length; ++i) {
@@ -138,6 +124,19 @@ show_test_vector(struct cperf_test_vector *test_vector)
 				printf("0x%02x", test_vector->auth_iv.data[i]);
 			else
 				printf("0x%02x, ", test_vector->auth_iv.data[i]);
+		}
+		printf("\n");
+	}
+
+	if (test_vector->aead_iv.data) {
+		printf("\naead_iv =\n");
+		for (i = 0; i < test_vector->aead_iv.length; ++i) {
+			if ((i % wrap == 0) && (i != 0))
+				printf("\n");
+			if (i == (uint32_t)(test_vector->aead_iv.length - 1))
+				printf("0x%02x", test_vector->aead_iv.data[i]);
+			else
+				printf("0x%02x, ", test_vector->aead_iv.data[i]);
 		}
 		printf("\n");
 	}
@@ -345,6 +344,20 @@ parse_entry(char *entry, struct cperf_test_vector *vector,
 			vector->auth_key.length = opts->auth_key_sz;
 		}
 
+	} else if (strstr(key_token, "aead_key")) {
+		rte_free(vector->aead_key.data);
+		vector->aead_key.data = data;
+		if (tc_found)
+			vector->aead_key.length = data_length;
+		else {
+			if (opts->aead_key_sz > data_length) {
+				printf("Global aead_key shorter than "
+					"aead_key_sz\n");
+				return -1;
+			}
+			vector->aead_key.length = opts->aead_key_sz;
+		}
+
 	} else if (strstr(key_token, "cipher_iv")) {
 		rte_free(vector->cipher_iv.data);
 		vector->cipher_iv.data = data;
@@ -373,6 +386,20 @@ parse_entry(char *entry, struct cperf_test_vector *vector,
 			vector->auth_iv.length = opts->auth_iv_sz;
 		}
 
+	} else if (strstr(key_token, "aead_iv")) {
+		rte_free(vector->aead_iv.data);
+		vector->aead_iv.data = data;
+		if (tc_found)
+			vector->aead_iv.length = data_length;
+		else {
+			if (opts->aead_iv_sz > data_length) {
+				printf("Global aead iv shorter than "
+					"aead_iv_sz\n");
+				return -1;
+			}
+			vector->aead_iv.length = opts->aead_iv_sz;
+		}
+
 	} else if (strstr(key_token, "ciphertext")) {
 		rte_free(vector->ciphertext.data);
 		vector->ciphertext.data = data;
@@ -390,7 +417,7 @@ parse_entry(char *entry, struct cperf_test_vector *vector,
 	} else if (strstr(key_token, "aad")) {
 		rte_free(vector->aad.data);
 		vector->aad.data = data;
-		vector->aad.phys_addr = rte_malloc_virt2phy(vector->aad.data);
+		vector->aad.phys_addr = rte_malloc_virt2iova(vector->aad.data);
 		if (tc_found)
 			vector->aad.length = data_length;
 		else {
@@ -405,7 +432,7 @@ parse_entry(char *entry, struct cperf_test_vector *vector,
 	} else if (strstr(key_token, "digest")) {
 		rte_free(vector->digest.data);
 		vector->digest.data = data;
-		vector->digest.phys_addr = rte_malloc_virt2phy(
+		vector->digest.phys_addr = rte_malloc_virt2iova(
 			vector->digest.data);
 		if (tc_found)
 			vector->digest.length = data_length;
@@ -479,8 +506,7 @@ parse_file(struct cperf_test_vector *vector, struct cperf_options *opts)
 		if (entry == NULL)
 			return -1;
 
-		memset(entry, 0, strlen(line) + 1);
-		strncpy(entry, line, strlen(line));
+		strcpy(entry, line);
 
 		/* check if entry ends with , or = */
 		if (entry[strlen(entry) - 1] == ','
@@ -497,8 +523,8 @@ parse_file(struct cperf_test_vector *vector, struct cperf_options *opts)
 				if (entry_extended == NULL)
 					goto err;
 				entry = entry_extended;
-
-				strncat(entry, line, strlen(line));
+				/* entry has been allocated accordingly */
+				strcpy(&entry[strlen(entry)], line);
 
 				if (entry[strlen(entry) - 1] != ',')
 					break;

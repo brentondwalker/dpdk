@@ -1,40 +1,10 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016-2017 Intel Corporation
  */
 
 #include <rte_common.h>
-#include <rte_config.h>
 #include <rte_cryptodev_pmd.h>
-#include <rte_cryptodev_vdev.h>
-#include <rte_vdev.h>
+#include <rte_bus_vdev.h>
 #include <rte_malloc.h>
 
 #include "null_crypto_pmd_private.h"
@@ -108,7 +78,7 @@ get_session(struct null_crypto_qp *qp, struct rte_crypto_op *op)
 	if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
 		if (likely(sym_op->session != NULL))
 			sess = (struct null_crypto_session *)
-					get_session_private_data(
+					get_sym_session_private_data(
 					sym_op->session, cryptodev_driver_id);
 	} else {
 		void *_sess = NULL;
@@ -129,8 +99,8 @@ get_session(struct null_crypto_qp *qp, struct rte_crypto_op *op)
 			sess = NULL;
 		}
 		sym_op->session = (struct rte_cryptodev_sym_session *)_sess;
-		set_session_private_data(sym_op->session, cryptodev_driver_id,
-			_sess_private_data);
+		set_sym_session_private_data(op->sym->session,
+				cryptodev_driver_id, _sess_private_data);
 	}
 
 	return sess;
@@ -183,28 +153,18 @@ null_crypto_pmd_dequeue_burst(void *queue_pair, struct rte_crypto_op **ops,
 	return nb_dequeued;
 }
 
-static int cryptodev_null_remove(const char *name);
-
 /** Create crypto device */
 static int
 cryptodev_null_create(const char *name,
 		struct rte_vdev_device *vdev,
-		struct rte_crypto_vdev_init_params *init_params)
+		struct rte_cryptodev_pmd_init_params *init_params)
 {
 	struct rte_cryptodev *dev;
 	struct null_crypto_private *internals;
-
-	if (init_params->name[0] == '\0')
-		snprintf(init_params->name, sizeof(init_params->name),
-				"%s", name);
-
-	dev = rte_cryptodev_vdev_pmd_init(init_params->name,
-			sizeof(struct null_crypto_private),
-			init_params->socket_id,
-			vdev);
+	dev = rte_cryptodev_pmd_create(name, &vdev->device, init_params);
 	if (dev == NULL) {
-		NULL_CRYPTO_LOG_ERR("failed to create cryptodev vdev");
-		goto init_error;
+		NULL_LOG(ERR, "failed to create cryptodev vdev");
+		return -EFAULT;
 	}
 
 	dev->driver_id = cryptodev_driver_id;
@@ -216,69 +176,60 @@ cryptodev_null_create(const char *name,
 
 	dev->feature_flags = RTE_CRYPTODEV_FF_SYMMETRIC_CRYPTO |
 			RTE_CRYPTODEV_FF_SYM_OPERATION_CHAINING |
-			RTE_CRYPTODEV_FF_MBUF_SCATTER_GATHER;
+			RTE_CRYPTODEV_FF_IN_PLACE_SGL;
 
 	internals = dev->data->dev_private;
 
 	internals->max_nb_qpairs = init_params->max_nb_queue_pairs;
-	internals->max_nb_sessions = init_params->max_nb_sessions;
 
 	return 0;
-
-init_error:
-	NULL_CRYPTO_LOG_ERR("driver %s: cryptodev_null_create failed",
-			init_params->name);
-	cryptodev_null_remove(init_params->name);
-
-	return -EFAULT;
 }
 
 /** Initialise null crypto device */
 static int
 cryptodev_null_probe(struct rte_vdev_device *dev)
 {
-	struct rte_crypto_vdev_init_params init_params = {
-		RTE_CRYPTODEV_VDEV_DEFAULT_MAX_NB_QUEUE_PAIRS,
-		RTE_CRYPTODEV_VDEV_DEFAULT_MAX_NB_SESSIONS,
+	struct rte_cryptodev_pmd_init_params init_params = {
+		"",
+		sizeof(struct null_crypto_private),
 		rte_socket_id(),
-		{0}
+		RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_QUEUE_PAIRS
 	};
-	const char *name;
+	const char *name, *args;
+	int retval;
 
 	name = rte_vdev_device_name(dev);
 	if (name == NULL)
 		return -EINVAL;
 
-	RTE_LOG(INFO, PMD, "Initialising %s on NUMA node %d\n",
-		name, init_params.socket_id);
-	if (init_params.name[0] != '\0')
-		RTE_LOG(INFO, PMD, "  User defined name = %s\n",
-			init_params.name);
-	RTE_LOG(INFO, PMD, "  Max number of queue pairs = %d\n",
-			init_params.max_nb_queue_pairs);
-	RTE_LOG(INFO, PMD, "  Max number of sessions = %d\n",
-			init_params.max_nb_sessions);
+	args = rte_vdev_device_args(dev);
+
+	retval = rte_cryptodev_pmd_parse_input_args(&init_params, args);
+	if (retval) {
+		NULL_LOG(ERR,
+				"Failed to parse initialisation arguments[%s]",
+				args);
+		return -EINVAL;
+	}
 
 	return cryptodev_null_create(name, dev, &init_params);
 }
 
-/** Uninitialise null crypto device */
 static int
-cryptodev_null_remove(const char *name)
+cryptodev_null_remove_dev(struct rte_vdev_device *vdev)
 {
+	struct rte_cryptodev *cryptodev;
+	const char *name;
+
+	name = rte_vdev_device_name(vdev);
 	if (name == NULL)
 		return -EINVAL;
 
-	RTE_LOG(INFO, PMD, "Closing null crypto device %s on numa socket %u\n",
-			name, rte_socket_id());
+	cryptodev = rte_cryptodev_pmd_get_named_dev(name);
+	if (cryptodev == NULL)
+		return -ENODEV;
 
-	return 0;
-}
-
-static int
-cryptodev_null_remove_dev(struct rte_vdev_device *dev)
-{
-	return cryptodev_null_remove(rte_vdev_device_name(dev));
+	return rte_cryptodev_pmd_destroy(cryptodev);
 }
 
 static struct rte_vdev_driver cryptodev_null_pmd_drv = {
@@ -286,10 +237,17 @@ static struct rte_vdev_driver cryptodev_null_pmd_drv = {
 	.remove = cryptodev_null_remove_dev,
 };
 
+static struct cryptodev_driver null_crypto_drv;
+
 RTE_PMD_REGISTER_VDEV(CRYPTODEV_NAME_NULL_PMD, cryptodev_null_pmd_drv);
 RTE_PMD_REGISTER_ALIAS(CRYPTODEV_NAME_NULL_PMD, cryptodev_null_pmd);
 RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_NULL_PMD,
 	"max_nb_queue_pairs=<int> "
-	"max_nb_sessions=<int> "
 	"socket_id=<int>");
-RTE_PMD_REGISTER_CRYPTO_DRIVER(cryptodev_null_pmd_drv, cryptodev_driver_id);
+RTE_PMD_REGISTER_CRYPTO_DRIVER(null_crypto_drv, cryptodev_null_pmd_drv.driver,
+		cryptodev_driver_id);
+
+RTE_INIT(null_init_log)
+{
+	null_logtype_driver = rte_log_register("pmd.crypto.null");
+}

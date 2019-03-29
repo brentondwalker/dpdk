@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2014 Intel Corporation
  */
 
 
@@ -48,9 +19,9 @@
 #define NB_SOCKETS                      (2)
 #define MEMPOOL_CACHE_SIZE 250
 #define MAX_PKT_BURST                   (32)
-#define RTE_TEST_RX_DESC_DEFAULT        (128)
-#define RTE_TEST_TX_DESC_DEFAULT        (512)
-#define RTE_PORT_ALL            (~(uint8_t)0x0)
+#define RTE_TEST_RX_DESC_DEFAULT        (1024)
+#define RTE_TEST_TX_DESC_DEFAULT        (1024)
+#define RTE_PORT_ALL            (~(uint16_t)0x0)
 
 /* how long test would take at full line rate */
 #define RTE_TEST_DURATION                (2)
@@ -94,14 +65,6 @@ static struct rte_eth_conf port_conf = {
 		.mq_mode = ETH_MQ_RX_NONE,
 		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.header_split   = 0, /**< Header Split disabled */
-		.hw_ip_checksum = 0, /**< IP checksum offload enabled */
-		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
-		.hw_vlan_strip  = 0, /**< VLAN strip enabled. */
-		.hw_vlan_extend = 0, /**< Extended VLAN disabled. */
-		.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
-		.hw_strip_crc   = 1, /**< CRC stripped by hardware */
-		.enable_scatter = 0, /**< scatter rx disabled */
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -126,11 +89,6 @@ static struct rte_eth_txconf tx_conf = {
 	},
 	.tx_free_thresh = 32, /* Use PMD default values */
 	.tx_rs_thresh = 32, /* Use PMD default values */
-	.txq_flags = (ETH_TXQ_FLAGS_NOMULTSEGS |
-		      ETH_TXQ_FLAGS_NOVLANOFFL |
-		      ETH_TXQ_FLAGS_NOXSUMSCTP |
-		      ETH_TXQ_FLAGS_NOXSUMUDP |
-		      ETH_TXQ_FLAGS_NOXSUMTCP)
 };
 
 enum {
@@ -143,7 +101,7 @@ struct lcore_conf {
 	uint8_t status;
 	uint8_t socketid;
 	uint16_t nb_ports;
-	uint8_t portlist[RTE_MAX_ETHPORTS];
+	uint16_t portlist[RTE_MAX_ETHPORTS];
 } __rte_cache_aligned;
 
 struct lcore_conf lcore_conf[RTE_MAX_LCORE];
@@ -160,11 +118,12 @@ static uint32_t sc_flag;
 
 /* Check the link status of all ports in up to 3s, and print them finally */
 static void
-check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
+check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 {
 #define CHECK_INTERVAL 100 /* 100ms */
 #define MAX_CHECK_TIME 30 /* 3s (30 * 100ms) in total */
-	uint8_t portid, count, all_ports_up, print_flag = 0;
+	uint16_t portid;
+	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
 
 	printf("Checking link statuses...\n");
@@ -179,16 +138,15 @@ check_all_ports_link_status(uint8_t port_num, uint32_t port_mask)
 			/* print link status if flag set */
 			if (print_flag == 1) {
 				if (link.link_status) {
-					printf("Port %d Link Up - speed %u "
-						"Mbps - %s\n", (uint8_t)portid,
-						(unsigned)link.link_speed,
+					printf(
+					"Port%d Link Up. Speed %u Mbps - %s\n",
+						portid, link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
 					("full-duplex") : ("half-duplex\n"));
 					if (link_mbps == 0)
 						link_mbps = link.link_speed;
 				} else
-					printf("Port %d Link Down\n",
-						(uint8_t)portid);
+					printf("Port %d Link Down\n", portid);
 				continue;
 			}
 			/* clear all_ports_up flag if any link down */
@@ -321,10 +279,10 @@ alloc_lcore(uint16_t socketid)
 	return (uint16_t)-1;
 }
 
-volatile uint64_t stop;
-uint64_t count;
-uint64_t drop;
-uint64_t idle;
+static volatile uint64_t stop;
+static uint64_t count;
+static uint64_t drop;
+static uint64_t idle;
 
 static void
 reset_count(void)
@@ -335,7 +293,7 @@ reset_count(void)
 }
 
 static void
-stats_display(uint8_t port_id)
+stats_display(uint16_t port_id)
 {
 	struct rte_eth_stats stats;
 	rte_eth_stats_get(port_id, &stats);
@@ -383,7 +341,7 @@ measure_rxtx(struct lcore_conf *conf,
 	while (likely(!stop)) {
 		for (i = 0; i < conf->nb_ports; i++) {
 			portid = conf->portlist[i];
-			nb_rx = rte_eth_rx_burst((uint8_t) portid, 0,
+			nb_rx = rte_eth_rx_burst(portid, 0,
 						 pkts_burst, MAX_PKT_BURST);
 			if (unlikely(nb_rx == 0)) {
 				idle++;
@@ -422,7 +380,7 @@ measure_rxonly(struct lcore_conf *conf,
 			portid = conf->portlist[i];
 
 			cur_tsc = rte_rdtsc();
-			nb_rx = rte_eth_rx_burst((uint8_t) portid, 0,
+			nb_rx = rte_eth_rx_burst(portid, 0,
 						 pkts_burst, MAX_PKT_BURST);
 			if (unlikely(nb_rx == 0)) {
 				idle++;
@@ -459,7 +417,7 @@ measure_txonly(struct lcore_conf *conf,
 	while (likely(!stop)) {
 		for (i = 0; i < conf->nb_ports; i++) {
 			portid = conf->portlist[i];
-			nb_rx = rte_eth_rx_burst((uint8_t) portid, 0,
+			nb_rx = rte_eth_rx_burst(portid, 0,
 						 pkts_burst, MAX_PKT_BURST);
 			if (unlikely(nb_rx == 0)) {
 				idle++;
@@ -537,7 +495,7 @@ main_loop(__rte_unused void *args)
 		portid = conf->portlist[i];
 		int nb_free = pkt_per_port;
 		do { /* dry out */
-			nb_rx = rte_eth_rx_burst((uint8_t) portid, 0,
+			nb_rx = rte_eth_rx_burst(portid, 0,
 						 pkts_burst, MAX_PKT_BURST);
 			nb_tx = 0;
 			while (nb_tx < nb_rx)
@@ -557,7 +515,7 @@ main_loop(__rte_unused void *args)
 	return 0;
 }
 
-rte_atomic64_t start;
+static rte_atomic64_t start;
 
 static inline int
 poll_burst(void *args)
@@ -572,6 +530,7 @@ poll_burst(void *args)
 	unsigned i, portid, nb_rx = 0;
 	uint64_t total;
 	uint64_t timeout = MAX_IDLE;
+	int num[RTE_MAX_ETHPORTS];
 
 	lcore_id = rte_lcore_id();
 	conf = &lcore_conf[lcore_id];
@@ -591,6 +550,7 @@ poll_burst(void *args)
 	for (i = 0; i < conf->nb_ports; i++) {
 		portid = conf->portlist[i];
 		next[portid] = i * pkt_per_port;
+		num[portid] = pkt_per_port;
 	}
 
 	while (!rte_atomic64_read(&start))
@@ -600,9 +560,9 @@ poll_burst(void *args)
 	while (total) {
 		for (i = 0; i < conf->nb_ports; i++) {
 			portid = conf->portlist[i];
-			nb_rx = rte_eth_rx_burst((uint8_t) portid, 0,
-						 &pkts_burst[next[portid]],
-						 MAX_PKT_BURST);
+			nb_rx = rte_eth_rx_burst(portid, 0,
+					&pkts_burst[next[portid]],
+					RTE_MIN(MAX_PKT_BURST, num[portid]));
 			if (unlikely(nb_rx == 0)) {
 				timeout--;
 				if (unlikely(timeout == 0))
@@ -610,6 +570,7 @@ poll_burst(void *args)
 				continue;
 			}
 			next[portid] += nb_rx;
+			num[portid] -= nb_rx;
 			total -= nb_rx;
 		}
 	}
@@ -618,7 +579,6 @@ timeout:
 
 	printf("%"PRIu64" packets lost, IDLE %"PRIu64" times\n",
 	       total, MAX_IDLE - timeout);
-
 	/* clean up */
 	total = pkt_per_port * conf->nb_ports - total;
 	for (i = 0; i < total; i++)
@@ -644,7 +604,7 @@ exec_burst(uint32_t flags, int lcore)
 	conf = &lcore_conf[lcore];
 
 	pkt_per_port = MAX_TRAFFIC_BURST;
-	num = pkt_per_port;
+	num = pkt_per_port * conf->nb_ports;
 
 	rte_atomic64_init(&start);
 
@@ -661,11 +621,12 @@ exec_burst(uint32_t flags, int lcore)
 		nb_tx = RTE_MIN(MAX_PKT_BURST, num);
 		for (i = 0; i < conf->nb_ports; i++) {
 			portid = conf->portlist[i];
-			rte_eth_tx_burst(portid, 0,
+			nb_tx = rte_eth_tx_burst(portid, 0,
 					 &tx_burst[idx], nb_tx);
 			idx += nb_tx;
+			num -= nb_tx;
 		}
-		num -= nb_tx;
+
 	}
 
 	sleep(5);
@@ -702,7 +663,7 @@ test_pmd_perf(void)
 	signal(SIGUSR1, signal_handler);
 	signal(SIGUSR2, signal_handler);
 
-	nb_ports = rte_eth_dev_count();
+	nb_ports = rte_eth_dev_count_avail();
 	if (nb_ports < NB_ETHPORTS_USED) {
 		printf("At least %u port(s) used for perf. test\n",
 		       NB_ETHPORTS_USED);
@@ -724,7 +685,7 @@ test_pmd_perf(void)
 
 	reset_count();
 	num = 0;
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		if (socketid == -1) {
 			socketid = rte_eth_dev_socket_id(portid);
 			slave_id = alloc_lcore(socketid);
@@ -817,7 +778,7 @@ test_pmd_perf(void)
 			return -1;
 
 	/* port tear down */
-	for (portid = 0; portid < nb_ports; portid++) {
+	RTE_ETH_FOREACH_DEV(portid) {
 		if (socketid != rte_eth_dev_socket_id(portid))
 			continue;
 
@@ -834,38 +795,29 @@ test_set_rxtx_conf(cmdline_fixed_string_t mode)
 
 	if (!strcmp(mode, "vector")) {
 		/* vector rx, tx */
-		tx_conf.txq_flags = 0xf01;
 		tx_conf.tx_rs_thresh = 32;
 		tx_conf.tx_free_thresh = 32;
-		port_conf.rxmode.hw_ip_checksum = 0;
-		port_conf.rxmode.enable_scatter = 0;
 		return 0;
 	} else if (!strcmp(mode, "scalar")) {
 		/* bulk alloc rx, full-featured tx */
-		tx_conf.txq_flags = 0;
 		tx_conf.tx_rs_thresh = 32;
 		tx_conf.tx_free_thresh = 32;
-		port_conf.rxmode.hw_ip_checksum = 1;
-		port_conf.rxmode.enable_scatter = 0;
+		port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_CHECKSUM;
 		return 0;
 	} else if (!strcmp(mode, "hybrid")) {
 		/* bulk alloc rx, vector tx
 		 * when vec macro not define,
 		 * using the same rx/tx as scalar
 		 */
-		tx_conf.txq_flags = 0xf01;
 		tx_conf.tx_rs_thresh = 32;
 		tx_conf.tx_free_thresh = 32;
-		port_conf.rxmode.hw_ip_checksum = 1;
-		port_conf.rxmode.enable_scatter = 0;
+		port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_CHECKSUM;
 		return 0;
 	} else if (!strcmp(mode, "full")) {
 		/* full feature rx,tx pair */
-		tx_conf.txq_flags = 0x0;   /* must condition */
 		tx_conf.tx_rs_thresh = 32;
 		tx_conf.tx_free_thresh = 32;
-		port_conf.rxmode.hw_ip_checksum = 0;
-		port_conf.rxmode.enable_scatter = 1; /* must condition */
+		port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_SCATTER;
 		return 0;
 	}
 

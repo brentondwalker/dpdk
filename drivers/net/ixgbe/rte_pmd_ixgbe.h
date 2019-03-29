@@ -1,33 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright (c) 2016 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016 Intel Corporation
  */
 
 /**
@@ -39,7 +11,7 @@
 #ifndef _PMD_IXGBE_H_
 #define _PMD_IXGBE_H_
 
-#include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 
 /**
  * Notify VF when PF link status changes.
@@ -53,7 +25,7 @@
  *   - (-ENODEV) if *port* invalid.
  *   - (-EINVAL) if *vf* invalid.
  */
-int rte_pmd_ixgbe_ping_vf(uint8_t port, uint16_t vf);
+int rte_pmd_ixgbe_ping_vf(uint16_t port, uint16_t vf);
 
 /**
  * Set the VF MAC address.
@@ -69,7 +41,7 @@ int rte_pmd_ixgbe_ping_vf(uint8_t port, uint16_t vf);
  *   - (-ENODEV) if *port* invalid.
  *   - (-EINVAL) if *vf* or *mac_addr* is invalid.
  */
-int rte_pmd_ixgbe_set_vf_mac_addr(uint8_t port, uint16_t vf,
+int rte_pmd_ixgbe_set_vf_mac_addr(uint16_t port, uint16_t vf,
 		struct ether_addr *mac_addr);
 
 /**
@@ -87,7 +59,8 @@ int rte_pmd_ixgbe_set_vf_mac_addr(uint8_t port, uint16_t vf,
  *   - (-ENODEV) if *port* invalid.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_set_vf_vlan_anti_spoof(uint8_t port, uint16_t vf, uint8_t on);
+int rte_pmd_ixgbe_set_vf_vlan_anti_spoof(uint16_t port, uint16_t vf,
+					 uint8_t on);
 
 /**
  * Enable/Disable VF MAC anti spoofing.
@@ -104,7 +77,7 @@ int rte_pmd_ixgbe_set_vf_vlan_anti_spoof(uint8_t port, uint16_t vf, uint8_t on);
  *   - (-ENODEV) if *port* invalid.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_set_vf_mac_anti_spoof(uint8_t port, uint16_t vf, uint8_t on);
+int rte_pmd_ixgbe_set_vf_mac_anti_spoof(uint16_t port, uint16_t vf, uint8_t on);
 
 /**
  * Enable/Disable vf vlan insert
@@ -122,7 +95,7 @@ int rte_pmd_ixgbe_set_vf_mac_anti_spoof(uint8_t port, uint16_t vf, uint8_t on);
  *   - (-ENODEV) if *port* invalid.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_set_vf_vlan_insert(uint8_t port, uint16_t vf,
+int rte_pmd_ixgbe_set_vf_vlan_insert(uint16_t port, uint16_t vf,
 		uint16_t vlan_id);
 
 /**
@@ -139,7 +112,7 @@ int rte_pmd_ixgbe_set_vf_vlan_insert(uint8_t port, uint16_t vf,
  *   - (-ENODEV) if *port* invalid.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_set_tx_loopback(uint8_t port, uint8_t on);
+int rte_pmd_ixgbe_set_tx_loopback(uint16_t port, uint8_t on);
 
 /**
  * set all queues drop enable bit
@@ -155,7 +128,7 @@ int rte_pmd_ixgbe_set_tx_loopback(uint8_t port, uint8_t on);
  *   - (-ENODEV) if *port* invalid.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_set_all_queues_drop_en(uint8_t port, uint8_t on);
+int rte_pmd_ixgbe_set_all_queues_drop_en(uint16_t port, uint8_t on);
 
 /**
  * set drop enable bit in the VF split rx control register
@@ -174,7 +147,7 @@ int rte_pmd_ixgbe_set_all_queues_drop_en(uint8_t port, uint8_t on);
  *   - (-EINVAL) if bad parameter.
  */
 
-int rte_pmd_ixgbe_set_vf_split_drop_en(uint8_t port, uint16_t vf, uint8_t on);
+int rte_pmd_ixgbe_set_vf_split_drop_en(uint16_t port, uint16_t vf, uint8_t on);
 
 /**
  * Enable/Disable vf vlan strip for all queues in a pool
@@ -194,7 +167,7 @@ int rte_pmd_ixgbe_set_vf_split_drop_en(uint8_t port, uint16_t vf, uint8_t on);
  *   - (-EINVAL) if bad parameter.
  */
 int
-rte_pmd_ixgbe_set_vf_vlan_stripq(uint8_t port, uint16_t vf, uint8_t on);
+rte_pmd_ixgbe_set_vf_vlan_stripq(uint16_t port, uint16_t vf, uint8_t on);
 
 /**
  * Enable MACsec offload.
@@ -212,7 +185,7 @@ rte_pmd_ixgbe_set_vf_vlan_stripq(uint8_t port, uint16_t vf, uint8_t on);
  *   - (-ENODEV) if *port* invalid.
  *   - (-ENOTSUP) if hardware doesn't support this feature.
  */
-int rte_pmd_ixgbe_macsec_enable(uint8_t port, uint8_t en, uint8_t rp);
+int rte_pmd_ixgbe_macsec_enable(uint16_t port, uint8_t en, uint8_t rp);
 
 /**
  * Disable MACsec offload.
@@ -224,7 +197,7 @@ int rte_pmd_ixgbe_macsec_enable(uint8_t port, uint8_t en, uint8_t rp);
  *   - (-ENODEV) if *port* invalid.
  *   - (-ENOTSUP) if hardware doesn't support this feature.
  */
-int rte_pmd_ixgbe_macsec_disable(uint8_t port);
+int rte_pmd_ixgbe_macsec_disable(uint16_t port);
 
 /**
  * Configure Tx SC (Secure Connection).
@@ -238,7 +211,7 @@ int rte_pmd_ixgbe_macsec_disable(uint8_t port);
  *   - (-ENODEV) if *port* invalid.
  *   - (-ENOTSUP) if hardware doesn't support this feature.
  */
-int rte_pmd_ixgbe_macsec_config_txsc(uint8_t port, uint8_t *mac);
+int rte_pmd_ixgbe_macsec_config_txsc(uint16_t port, uint8_t *mac);
 
 /**
  * Configure Rx SC (Secure Connection).
@@ -254,7 +227,7 @@ int rte_pmd_ixgbe_macsec_config_txsc(uint8_t port, uint8_t *mac);
  *   - (-ENODEV) if *port* invalid.
  *   - (-ENOTSUP) if hardware doesn't support this feature.
  */
-int rte_pmd_ixgbe_macsec_config_rxsc(uint8_t port, uint8_t *mac, uint16_t pi);
+int rte_pmd_ixgbe_macsec_config_rxsc(uint16_t port, uint8_t *mac, uint16_t pi);
 
 /**
  * Enable Tx SA (Secure Association).
@@ -275,7 +248,7 @@ int rte_pmd_ixgbe_macsec_config_rxsc(uint8_t port, uint8_t *mac, uint16_t pi);
  *   - (-ENOTSUP) if hardware doesn't support this feature.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_macsec_select_txsa(uint8_t port, uint8_t idx, uint8_t an,
+int rte_pmd_ixgbe_macsec_select_txsa(uint16_t port, uint8_t idx, uint8_t an,
 		uint32_t pn, uint8_t *key);
 
 /**
@@ -297,7 +270,7 @@ int rte_pmd_ixgbe_macsec_select_txsa(uint8_t port, uint8_t idx, uint8_t an,
  *   - (-ENOTSUP) if hardware doesn't support this feature.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_macsec_select_rxsa(uint8_t port, uint8_t idx, uint8_t an,
+int rte_pmd_ixgbe_macsec_select_rxsa(uint16_t port, uint8_t idx, uint8_t an,
 		uint32_t pn, uint8_t *key);
 
 /**
@@ -323,7 +296,8 @@ int rte_pmd_ixgbe_macsec_select_rxsa(uint8_t port, uint8_t idx, uint8_t an,
 *   - (-EINVAL) if bad parameter.
 */
 int
-rte_pmd_ixgbe_set_vf_rxmode(uint8_t port, uint16_t vf, uint16_t rx_mask, uint8_t on);
+rte_pmd_ixgbe_set_vf_rxmode(uint16_t port, uint16_t vf, uint16_t rx_mask,
+			     uint8_t on);
 
 /**
 * Enable or disable a VF traffic receive of an Ethernet device.
@@ -342,7 +316,7 @@ rte_pmd_ixgbe_set_vf_rxmode(uint8_t port, uint16_t vf, uint16_t rx_mask, uint8_t
 *   - (-EINVAL) if bad parameter.
 */
 int
-rte_pmd_ixgbe_set_vf_rx(uint8_t port, uint16_t vf, uint8_t on);
+rte_pmd_ixgbe_set_vf_rx(uint16_t port, uint16_t vf, uint8_t on);
 
 /**
 * Enable or disable a VF traffic transmit of the Ethernet device.
@@ -361,7 +335,7 @@ rte_pmd_ixgbe_set_vf_rx(uint8_t port, uint16_t vf, uint8_t on);
 *   - (-EINVAL) if bad parameter.
 */
 int
-rte_pmd_ixgbe_set_vf_tx(uint8_t port, uint16_t vf, uint8_t on);
+rte_pmd_ixgbe_set_vf_tx(uint16_t port, uint16_t vf, uint8_t on);
 
 /**
 * Enable/Disable hardware VF VLAN filtering by an Ethernet device of
@@ -383,7 +357,8 @@ rte_pmd_ixgbe_set_vf_tx(uint8_t port, uint16_t vf, uint8_t on);
 *   - (-EINVAL) if bad parameter.
 */
 int
-rte_pmd_ixgbe_set_vf_vlan_filter(uint8_t port, uint16_t vlan, uint64_t vf_mask, uint8_t vlan_on);
+rte_pmd_ixgbe_set_vf_vlan_filter(uint16_t port, uint16_t vlan,
+				 uint64_t vf_mask, uint8_t vlan_on);
 
 /**
  * Set the rate limitation for a vf on an Ethernet device.
@@ -402,7 +377,8 @@ rte_pmd_ixgbe_set_vf_vlan_filter(uint8_t port, uint16_t vlan, uint64_t vf_mask, 
  *   - (-ENODEV) if *port_id* invalid.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_set_vf_rate_limit(uint8_t port, uint16_t vf, uint16_t tx_rate, uint64_t q_msk);
+int rte_pmd_ixgbe_set_vf_rate_limit(uint16_t port, uint16_t vf,
+				     uint16_t tx_rate, uint64_t q_msk);
 
 /**
  * Set all the TCs' bandwidth weight.
@@ -423,7 +399,7 @@ int rte_pmd_ixgbe_set_vf_rate_limit(uint8_t port, uint16_t vf, uint16_t tx_rate,
  *   - (-EINVAL) if bad parameter.
  *   - (-ENOTSUP) not supported by firmware.
  */
-int rte_pmd_ixgbe_set_tc_bw_alloc(uint8_t port,
+int rte_pmd_ixgbe_set_tc_bw_alloc(uint16_t port,
 				  uint8_t tc_num,
 				  uint8_t *bw_weight);
 
@@ -439,7 +415,7 @@ int rte_pmd_ixgbe_set_tc_bw_alloc(uint8_t port,
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_bypass_init(uint8_t port);
+int rte_pmd_ixgbe_bypass_init(uint16_t port);
 
 /**
  * Return bypass state.
@@ -456,7 +432,7 @@ int rte_pmd_ixgbe_bypass_init(uint8_t port);
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_bypass_state_show(uint8_t port, uint32_t *state);
+int rte_pmd_ixgbe_bypass_state_show(uint16_t port, uint32_t *state);
 
 /**
  * Set bypass state
@@ -473,7 +449,7 @@ int rte_pmd_ixgbe_bypass_state_show(uint8_t port, uint32_t *state);
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_bypass_state_set(uint8_t port, uint32_t *new_state);
+int rte_pmd_ixgbe_bypass_state_set(uint16_t port, uint32_t *new_state);
 
 /**
  * Return bypass state when given event occurs.
@@ -497,7 +473,7 @@ int rte_pmd_ixgbe_bypass_state_set(uint8_t port, uint32_t *new_state);
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_bypass_event_show(uint8_t port,
+int rte_pmd_ixgbe_bypass_event_show(uint16_t port,
 				    uint32_t event,
 				    uint32_t *state);
 
@@ -523,7 +499,7 @@ int rte_pmd_ixgbe_bypass_event_show(uint8_t port,
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_bypass_event_store(uint8_t port,
+int rte_pmd_ixgbe_bypass_event_store(uint16_t port,
 				     uint32_t event,
 				     uint32_t state);
 
@@ -547,7 +523,7 @@ int rte_pmd_ixgbe_bypass_event_store(uint8_t port,
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_bypass_wd_timeout_store(uint8_t port, uint32_t timeout);
+int rte_pmd_ixgbe_bypass_wd_timeout_store(uint16_t port, uint32_t timeout);
 
 /**
  * Get bypass firmware version.
@@ -561,7 +537,7 @@ int rte_pmd_ixgbe_bypass_wd_timeout_store(uint8_t port, uint32_t timeout);
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_bypass_ver_show(uint8_t port, uint32_t *ver);
+int rte_pmd_ixgbe_bypass_ver_show(uint16_t port, uint32_t *ver);
 
 /**
  * Return bypass watchdog timeout in seconds
@@ -583,7 +559,7 @@ int rte_pmd_ixgbe_bypass_ver_show(uint8_t port, uint32_t *ver);
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_bypass_wd_timeout_show(uint8_t port, uint32_t *wd_timeout);
+int rte_pmd_ixgbe_bypass_wd_timeout_show(uint16_t port, uint32_t *wd_timeout);
 
 /**
  * Reset bypass watchdog timer
@@ -595,8 +571,79 @@ int rte_pmd_ixgbe_bypass_wd_timeout_show(uint8_t port, uint32_t *wd_timeout);
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-EINVAL) if bad parameter.
  */
-int rte_pmd_ixgbe_bypass_wd_reset(uint8_t port);
+int rte_pmd_ixgbe_bypass_wd_reset(uint16_t port);
 
+/**
+ * Acquire swfw semaphore lock for MDIO access
+ *
+ * @param port
+ *   The port identifier of the Ethernet device.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if hardware doesn't support.
+ *   - (-ENODEV) if *port* invalid.
+ *   - (IXGBE_ERR_SWFW_SYNC) If sw/fw semaphore acquisition failed
+ */
+int __rte_experimental
+rte_pmd_ixgbe_mdio_lock(uint16_t port);
+
+/**
+ * Release swfw semaphore lock used for MDIO access
+ *
+ * @param port
+ *   The port identifier of the Ethernet device.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if hardware doesn't support.
+ *   - (-ENODEV) if *port* invalid.
+ */
+int __rte_experimental
+rte_pmd_ixgbe_mdio_unlock(uint16_t port);
+
+/**
+ * Read PHY register using MDIO without MDIO lock
+ * The lock must be taken separately before calling this
+ * API
+ * @param port
+ *   The port identifier of the Ethernet device.
+ * @param reg_addr
+ *   32 bit PHY Register
+ * @param dev_type
+ *   Used to define device base address
+ * @param phy_data
+ *   Pointer for reading PHY register data
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if hardware doesn't support.
+ *   - (-ENODEV) if *port* invalid.
+ *   - (IXGBE_ERR_PHY) If PHY read command failed
+ */
+int __rte_experimental
+rte_pmd_ixgbe_mdio_unlocked_read(uint16_t port, uint32_t reg_addr,
+				 uint32_t dev_type, uint16_t *phy_data);
+
+/**
+ * Write data to PHY register using without MDIO lock
+ * The lock must be taken separately before calling this
+ * API
+ *
+ * @param port
+ *   The port identifier of the Ethernet device.
+ * @param reg_addr
+ *   32 bit PHY Register
+ * @param dev_type
+ *   Used to define device base address
+ * @param phy_data
+ *   Data to write to PHY register
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if hardware doesn't support.
+ *   - (-ENODEV) if *port* invalid.
+ *   - (IXGBE_ERR_PHY) If PHY read command failed
+ */
+int __rte_experimental
+rte_pmd_ixgbe_mdio_unlocked_write(uint16_t port, uint32_t reg_addr,
+				  uint32_t dev_type, uint16_t phy_data);
 
 /**
  * Response sent back to ixgbe driver from user app after callback
@@ -661,4 +708,17 @@ enum {
 	((x) > RTE_PMD_IXGBE_BYPASS_TMT_OFF &&  \
 	(x) < RTE_PMD_IXGBE_BYPASS_TMT_NUM))
 
+/**
+ * @param port
+ *   The port identifier of the Ethernet device.
+ * @param enable
+ *    0 to disable and nonzero to enable 'SBP' bit in FCTRL register
+ *    to receive all packets
+ * @return
+ *   - (0) if successful.
+ *   - (-ENODEV) if *port* invalid.
+ *   - (-ENOTSUP) if hardware doesn't support this feature.
+ */
+int __rte_experimental
+rte_pmd_ixgbe_upd_fctrl_sbp(uint16_t port, int enable);
 #endif /* _PMD_IXGBE_H_ */

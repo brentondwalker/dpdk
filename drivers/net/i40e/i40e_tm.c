@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2017 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2017 Intel Corporation
  */
 
 #include <rte_malloc.h>
@@ -302,7 +273,7 @@ i40e_shaper_profile_add(struct rte_eth_dev *dev,
 	if (!shaper_profile)
 		return -ENOMEM;
 	shaper_profile->shaper_profile_id = shaper_profile_id;
-	(void)rte_memcpy(&shaper_profile->profile, profile,
+	rte_memcpy(&shaper_profile->profile, profile,
 			 sizeof(struct rte_tm_shaper_params));
 	TAILQ_INSERT_TAIL(&pf->tm_conf.shaper_profile_list,
 			  shaper_profile, node);
@@ -374,11 +345,13 @@ i40e_tm_node_search(struct rte_eth_dev *dev,
 }
 
 static int
-i40e_node_param_check(uint32_t node_id, uint32_t parent_node_id,
+i40e_node_param_check(struct rte_eth_dev *dev, uint32_t node_id,
 		      uint32_t priority, uint32_t weight,
 		      struct rte_tm_node_params *params,
 		      struct rte_tm_error *error)
 {
+	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
 	if (node_id == RTE_TM_NODE_ID_NULL) {
 		error->type = RTE_TM_ERROR_TYPE_NODE_ID;
 		error->message = "invalid node id";
@@ -409,8 +382,8 @@ i40e_node_param_check(uint32_t node_id, uint32_t parent_node_id,
 		return -EINVAL;
 	}
 
-	/* for root node */
-	if (parent_node_id == RTE_TM_NODE_ID_NULL) {
+	/* for non-leaf node */
+	if (node_id >= hw->func_caps.num_tx_qp) {
 		if (params->nonleaf.wfq_weight_mode) {
 			error->type =
 				RTE_TM_ERROR_TYPE_NODE_PARAMS_WFQ_WEIGHT_MODE;
@@ -433,7 +406,7 @@ i40e_node_param_check(uint32_t node_id, uint32_t parent_node_id,
 		return 0;
 	}
 
-	/* for TC or queue node */
+	/* for leaf node */
 	if (params->leaf.cman) {
 		error->type = RTE_TM_ERROR_TYPE_NODE_PARAMS_CMAN;
 		error->message = "Congestion management not supported";
@@ -478,7 +451,7 @@ i40e_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 	struct i40e_pf *pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	enum i40e_tm_node_type node_type = I40E_TM_NODE_TYPE_MAX;
 	enum i40e_tm_node_type parent_node_type = I40E_TM_NODE_TYPE_MAX;
-	struct i40e_tm_shaper_profile *shaper_profile;
+	struct i40e_tm_shaper_profile *shaper_profile = NULL;
 	struct i40e_tm_node *tm_node;
 	struct i40e_tm_node *parent_node;
 	uint16_t tc_nb = 0;
@@ -494,7 +467,7 @@ i40e_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 		return -EINVAL;
 	}
 
-	ret = i40e_node_param_check(node_id, parent_node_id, priority, weight,
+	ret = i40e_node_param_check(dev, node_id, priority, weight,
 				    params, error);
 	if (ret)
 		return ret;
@@ -507,12 +480,15 @@ i40e_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 	}
 
 	/* check the shaper profile id */
-	shaper_profile = i40e_shaper_profile_search(dev,
-						    params->shaper_profile_id);
-	if (!shaper_profile) {
-		error->type = RTE_TM_ERROR_TYPE_NODE_PARAMS_SHAPER_PROFILE_ID;
-		error->message = "shaper profile not exist";
-		return -EINVAL;
+	if (params->shaper_profile_id != RTE_TM_SHAPER_PROFILE_ID_NONE) {
+		shaper_profile = i40e_shaper_profile_search(
+					dev, params->shaper_profile_id);
+		if (!shaper_profile) {
+			error->type =
+				RTE_TM_ERROR_TYPE_NODE_PARAMS_SHAPER_PROFILE_ID;
+			error->message = "shaper profile not exist";
+			return -EINVAL;
+		}
 	}
 
 	/* root node if not have a parent */
@@ -544,12 +520,13 @@ i40e_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 		tm_node->reference_count = 0;
 		tm_node->parent = NULL;
 		tm_node->shaper_profile = shaper_profile;
-		(void)rte_memcpy(&tm_node->params, params,
+		rte_memcpy(&tm_node->params, params,
 				 sizeof(struct rte_tm_node_params));
 		pf->tm_conf.root = tm_node;
 
 		/* increase the reference counter of the shaper profile */
-		shaper_profile->reference_count++;
+		if (shaper_profile)
+			shaper_profile->reference_count++;
 
 		return 0;
 	}
@@ -615,9 +592,9 @@ i40e_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 	tm_node->priority = priority;
 	tm_node->weight = weight;
 	tm_node->reference_count = 0;
-	tm_node->parent = pf->tm_conf.root;
+	tm_node->parent = parent_node;
 	tm_node->shaper_profile = shaper_profile;
-	(void)rte_memcpy(&tm_node->params, params,
+	rte_memcpy(&tm_node->params, params,
 			 sizeof(struct rte_tm_node_params));
 	if (parent_node_type == I40E_TM_NODE_TYPE_PORT) {
 		TAILQ_INSERT_TAIL(&pf->tm_conf.tc_list,
@@ -631,7 +608,8 @@ i40e_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 	tm_node->parent->reference_count++;
 
 	/* increase the reference counter of the shaper profile */
-	shaper_profile->reference_count++;
+	if (shaper_profile)
+		shaper_profile->reference_count++;
 
 	return 0;
 }
@@ -678,14 +656,16 @@ i40e_node_delete(struct rte_eth_dev *dev, uint32_t node_id,
 
 	/* root node */
 	if (node_type == I40E_TM_NODE_TYPE_PORT) {
-		tm_node->shaper_profile->reference_count--;
+		if (tm_node->shaper_profile)
+			tm_node->shaper_profile->reference_count--;
 		rte_free(tm_node);
 		pf->tm_conf.root = NULL;
 		return 0;
 	}
 
 	/* TC or queue node */
-	tm_node->shaper_profile->reference_count--;
+	if (tm_node->shaper_profile)
+		tm_node->shaper_profile->reference_count--;
 	tm_node->parent->reference_count--;
 	if (node_type == I40E_TM_NODE_TYPE_TC) {
 		TAILQ_REMOVE(&pf->tm_conf.tc_list, tm_node, node);
@@ -753,15 +733,34 @@ i40e_level_capabilities_get(struct rte_eth_dev *dev,
 		cap->n_nodes_max = 1;
 		cap->n_nodes_nonleaf_max = 1;
 		cap->n_nodes_leaf_max = 0;
-		cap->non_leaf_nodes_identical = true;
-		cap->leaf_nodes_identical = true;
+	} else if (level_id == I40E_TM_NODE_TYPE_TC) {
+		/* TC */
+		cap->n_nodes_max = I40E_MAX_TRAFFIC_CLASS;
+		cap->n_nodes_nonleaf_max = I40E_MAX_TRAFFIC_CLASS;
+		cap->n_nodes_leaf_max = 0;
+	} else {
+		/* queue */
+		cap->n_nodes_max = hw->func_caps.num_tx_qp;
+		cap->n_nodes_nonleaf_max = 0;
+		cap->n_nodes_leaf_max = hw->func_caps.num_tx_qp;
+	}
+
+	cap->non_leaf_nodes_identical = true;
+	cap->leaf_nodes_identical = true;
+
+	if (level_id != I40E_TM_NODE_TYPE_QUEUE) {
 		cap->nonleaf.shaper_private_supported = true;
 		cap->nonleaf.shaper_private_dual_rate_supported = false;
 		cap->nonleaf.shaper_private_rate_min = 0;
 		/* 40Gbps -> 5GBps */
 		cap->nonleaf.shaper_private_rate_max = 5000000000ull;
 		cap->nonleaf.shaper_shared_n_max = 0;
-		cap->nonleaf.sched_n_children_max = I40E_MAX_TRAFFIC_CLASS;
+		if (level_id == I40E_TM_NODE_TYPE_PORT)
+			cap->nonleaf.sched_n_children_max =
+				I40E_MAX_TRAFFIC_CLASS;
+		else
+			cap->nonleaf.sched_n_children_max =
+				hw->func_caps.num_tx_qp;
 		cap->nonleaf.sched_sp_n_priorities_max = 1;
 		cap->nonleaf.sched_wfq_n_children_per_group_max = 0;
 		cap->nonleaf.sched_wfq_n_groups_max = 0;
@@ -771,21 +770,7 @@ i40e_level_capabilities_get(struct rte_eth_dev *dev,
 		return 0;
 	}
 
-	/* TC or queue node */
-	if (level_id == I40E_TM_NODE_TYPE_TC) {
-		/* TC */
-		cap->n_nodes_max = I40E_MAX_TRAFFIC_CLASS;
-		cap->n_nodes_nonleaf_max = I40E_MAX_TRAFFIC_CLASS;
-		cap->n_nodes_leaf_max = 0;
-		cap->non_leaf_nodes_identical = true;
-	} else {
-		/* queue */
-		cap->n_nodes_max = hw->func_caps.num_tx_qp;
-		cap->n_nodes_nonleaf_max = 0;
-		cap->n_nodes_leaf_max = hw->func_caps.num_tx_qp;
-		cap->non_leaf_nodes_identical = true;
-	}
-	cap->leaf_nodes_identical = true;
+	/* queue node */
 	cap->leaf.shaper_private_supported = true;
 	cap->leaf.shaper_private_dual_rate_supported = false;
 	cap->leaf.shaper_private_rate_min = 0;
@@ -888,11 +873,15 @@ i40e_hierarchy_commit(struct rte_eth_dev *dev,
 	 * If the port has a max bandwidth, the TCs should have none.
 	 */
 	/* port */
-	bw = pf->tm_conf.root->shaper_profile->profile.peak.rate;
+	if (pf->tm_conf.root->shaper_profile)
+		bw = pf->tm_conf.root->shaper_profile->profile.peak.rate;
+	else
+		bw = 0;
 	if (bw) {
 		/* check if any TC has a max bandwidth */
 		TAILQ_FOREACH(tm_node, tc_list, node) {
-			if (tm_node->shaper_profile->profile.peak.rate) {
+			if (tm_node->shaper_profile &&
+			    tm_node->shaper_profile->profile.peak.rate) {
 				error->type = RTE_TM_ERROR_TYPE_SHAPER_PROFILE;
 				error->message = "no port and TC max bandwidth"
 						 " in parallel";
@@ -936,7 +925,10 @@ i40e_hierarchy_commit(struct rte_eth_dev *dev,
 		}
 		tc_map &= ~BIT_ULL(i);
 
-		bw = tm_node->shaper_profile->profile.peak.rate;
+		if (tm_node->shaper_profile)
+			bw = tm_node->shaper_profile->profile.peak.rate;
+		else
+			bw = 0;
 		if (!bw)
 			continue;
 
@@ -947,7 +939,10 @@ i40e_hierarchy_commit(struct rte_eth_dev *dev,
 	}
 
 	TAILQ_FOREACH(tm_node, queue_list, node) {
-		bw = tm_node->shaper_profile->profile.peak.rate;
+		if (tm_node->shaper_profile)
+			bw = tm_node->shaper_profile->profile.peak.rate;
+		else
+			bw = 0;
 		if (bw) {
 			error->type = RTE_TM_ERROR_TYPE_NODE_PARAMS;
 			error->message = "not support queue QoS";

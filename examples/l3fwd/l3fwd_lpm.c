@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2016 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2016 Intel Corporation
  */
 
 #include <stdio.h>
@@ -46,7 +17,6 @@
 #include <rte_debug.h>
 #include <rte_ether.h>
 #include <rte_ethdev.h>
-#include <rte_mempool.h>
 #include <rte_cycles.h>
 #include <rte_mbuf.h>
 #include <rte_ip.h>
@@ -105,7 +75,7 @@ struct rte_lpm *ipv4_l3fwd_lpm_lookup_struct[NB_SOCKETS];
 struct rte_lpm6 *ipv6_l3fwd_lpm_lookup_struct[NB_SOCKETS];
 
 static inline uint16_t
-lpm_get_ipv4_dst_port(void *ipv4_hdr,  uint8_t portid, void *lookup_struct)
+lpm_get_ipv4_dst_port(void *ipv4_hdr, uint16_t portid, void *lookup_struct)
 {
 	uint32_t next_hop;
 	struct rte_lpm *ipv4_l3fwd_lookup_struct =
@@ -117,7 +87,7 @@ lpm_get_ipv4_dst_port(void *ipv4_hdr,  uint8_t portid, void *lookup_struct)
 }
 
 static inline uint16_t
-lpm_get_ipv6_dst_port(void *ipv6_hdr,  uint8_t portid, void *lookup_struct)
+lpm_get_ipv6_dst_port(void *ipv6_hdr, uint16_t portid, void *lookup_struct)
 {
 	uint32_t next_hop;
 	struct rte_lpm6 *ipv6_l3fwd_lookup_struct =
@@ -130,7 +100,7 @@ lpm_get_ipv6_dst_port(void *ipv6_hdr,  uint8_t portid, void *lookup_struct)
 
 static __rte_always_inline uint16_t
 lpm_get_dst_port(const struct lcore_conf *qconf, struct rte_mbuf *pkt,
-		uint8_t portid)
+		uint16_t portid)
 {
 	struct ipv6_hdr *ipv6_hdr;
 	struct ipv4_hdr *ipv4_hdr;
@@ -162,7 +132,7 @@ lpm_get_dst_port(const struct lcore_conf *qconf, struct rte_mbuf *pkt,
  */
 static __rte_always_inline uint16_t
 lpm_get_dst_port_with_ipv4(const struct lcore_conf *qconf, struct rte_mbuf *pkt,
-	uint32_t dst_ipv4, uint8_t portid)
+	uint32_t dst_ipv4, uint16_t portid)
 {
 	uint32_t next_hop;
 	struct ipv6_hdr *ipv6_hdr;
@@ -191,6 +161,8 @@ lpm_get_dst_port_with_ipv4(const struct lcore_conf *qconf, struct rte_mbuf *pkt,
 #include "l3fwd_lpm_sse.h"
 #elif defined RTE_MACHINE_CPUFLAG_NEON
 #include "l3fwd_lpm_neon.h"
+#elif defined(RTE_ARCH_PPC_64)
+#include "l3fwd_lpm_altivec.h"
 #else
 #include "l3fwd_lpm.h"
 #endif
@@ -203,7 +175,8 @@ lpm_main_loop(__attribute__((unused)) void *dummy)
 	unsigned lcore_id;
 	uint64_t prev_tsc, diff_tsc, cur_tsc;
 	int i, nb_rx;
-	uint8_t portid, queueid;
+	uint16_t portid;
+	uint8_t queueid;
 	struct lcore_conf *qconf;
 	const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) /
 		US_PER_S * BURST_TX_DRAIN_US;
@@ -225,7 +198,7 @@ lpm_main_loop(__attribute__((unused)) void *dummy)
 		portid = qconf->rx_queue_list[i].port_id;
 		queueid = qconf->rx_queue_list[i].queue_id;
 		RTE_LOG(INFO, L3FWD,
-			" -- lcoreid=%u portid=%hhu rxqueueid=%hhu\n",
+			" -- lcoreid=%u portid=%u rxqueueid=%hhu\n",
 			lcore_id, portid, queueid);
 	}
 
@@ -263,7 +236,8 @@ lpm_main_loop(__attribute__((unused)) void *dummy)
 			if (nb_rx == 0)
 				continue;
 
-#if defined RTE_ARCH_X86 || defined RTE_MACHINE_CPUFLAG_NEON
+#if defined RTE_ARCH_X86 || defined RTE_MACHINE_CPUFLAG_NEON \
+			 || defined RTE_ARCH_PPC_64
 			l3fwd_lpm_send_packets(nb_rx, pkts_burst,
 						portid, qconf);
 #else
@@ -413,7 +387,7 @@ lpm_parse_ptype(struct rte_mbuf *m)
 }
 
 uint16_t
-lpm_cb_parse_ptype(uint8_t port __rte_unused, uint16_t queue __rte_unused,
+lpm_cb_parse_ptype(uint16_t port __rte_unused, uint16_t queue __rte_unused,
 		   struct rte_mbuf *pkts[], uint16_t nb_pkts,
 		   uint16_t max_pkts __rte_unused,
 		   void *user_param __rte_unused)

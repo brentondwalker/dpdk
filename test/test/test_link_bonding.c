@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2014 Intel Corporation
  */
 
 #include "unistd.h"
@@ -46,6 +17,7 @@
 #include <rte_common.h>
 #include <rte_debug.h>
 #include <rte_ethdev.h>
+#include <rte_ethdev_driver.h>
 #include <rte_log.h>
 #include <rte_lcore.h>
 #include <rte_memory.h>
@@ -59,21 +31,18 @@
 
 #define TEST_MAX_NUMBER_OF_PORTS (6)
 
-#define RX_RING_SIZE 128
+#define RX_RING_SIZE 1024
 #define RX_FREE_THRESH 32
 #define RX_PTHRESH 8
 #define RX_HTHRESH 8
 #define RX_WTHRESH 0
 
-#define TX_RING_SIZE 512
+#define TX_RING_SIZE 1024
 #define TX_FREE_THRESH 32
 #define TX_PTHRESH 32
 #define TX_HTHRESH 0
 #define TX_WTHRESH 0
 #define TX_RSBIT_THRESH 32
-#define TX_Q_FLAGS (ETH_TXQ_FLAGS_NOMULTSEGS | ETH_TXQ_FLAGS_NOVLANOFFL |\
-	ETH_TXQ_FLAGS_NOXSUMSCTP | ETH_TXQ_FLAGS_NOXSUMUDP | \
-	ETH_TXQ_FLAGS_NOXSUMTCP)
 
 #define MBUF_CACHE_SIZE (250)
 #define BURST_SIZE (32)
@@ -94,9 +63,9 @@ uint8_t slave_mac[] = {0x00, 0xFF, 0x00, 0xFF, 0x00, 0x00 };
 uint8_t bonded_mac[] = {0xAA, 0xFF, 0xAA, 0xFF, 0xAA, 0xFF };
 
 struct link_bonding_unittest_params {
-	int8_t bonded_port_id;
-	int8_t slave_port_ids[TEST_MAX_NUMBER_OF_PORTS];
-	uint8_t bonded_slave_count;
+	int16_t bonded_port_id;
+	int16_t slave_port_ids[TEST_MAX_NUMBER_OF_PORTS];
+	uint16_t bonded_slave_count;
 	uint8_t bonding_mode;
 
 	uint16_t nb_rx_q;
@@ -163,35 +132,11 @@ static uint16_t dst_port_1 = 2024;
 
 static uint16_t vlan_id = 0x100;
 
-struct rte_eth_rxmode rx_mode = {
-	.max_rx_pkt_len = ETHER_MAX_LEN, /**< Default maximum frame length. */
-	.split_hdr_size = 0,
-	.header_split   = 0, /**< Header Split disabled. */
-	.hw_ip_checksum = 0, /**< IP checksum offload disabled. */
-	.hw_vlan_filter = 1, /**< VLAN filtering enabled. */
-	.hw_vlan_strip  = 1, /**< VLAN strip enabled. */
-	.hw_vlan_extend = 0, /**< Extended VLAN disabled. */
-	.jumbo_frame    = 0, /**< Jumbo Frame Support disabled. */
-	.hw_strip_crc   = 1, /**< CRC stripping by hardware enabled. */
-};
-
-struct rte_fdir_conf fdir_conf = {
-	.mode = RTE_FDIR_MODE_NONE,
-	.pballoc = RTE_FDIR_PBALLOC_64K,
-	.status = RTE_FDIR_REPORT_STATUS,
-	.drop_queue = 127,
-};
-
 static struct rte_eth_conf default_pmd_conf = {
 	.rxmode = {
 		.mq_mode = ETH_MQ_RX_NONE,
-		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.header_split   = 0, /**< Header Split disabled */
-		.hw_ip_checksum = 0, /**< IP checksum offload enabled */
-		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
-		.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
-		.hw_strip_crc   = 1, /**< CRC stripped by hardware */
+		.max_rx_pkt_len = ETHER_MAX_LEN,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -217,8 +162,6 @@ static struct rte_eth_txconf tx_conf_default = {
 	},
 	.tx_free_thresh = TX_FREE_THRESH,
 	.tx_rs_thresh = TX_RSBIT_THRESH,
-	.txq_flags = TX_Q_FLAGS
-
 };
 
 static void free_virtualpmd_tx_queue(void);
@@ -226,7 +169,7 @@ static void free_virtualpmd_tx_queue(void);
 
 
 static int
-configure_ethdev(uint8_t port_id, uint8_t start, uint8_t en_isr)
+configure_ethdev(uint16_t port_id, uint8_t start, uint8_t en_isr)
 {
 	int q_id;
 
@@ -317,7 +260,7 @@ test_create_bonded_device(void)
 {
 	int current_slave_count;
 
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	/* Don't try to recreate bonded device if re-running test suite*/
 	if (test_params->bonded_port_id == -1) {
@@ -387,7 +330,7 @@ test_add_slave_to_bonded_device(void)
 {
 	int current_slave_count;
 
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	TEST_ASSERT_SUCCESS(rte_eth_bond_slave_add(test_params->bonded_port_id,
 			test_params->slave_port_ids[test_params->bonded_slave_count]),
@@ -434,7 +377,7 @@ test_remove_slave_from_bonded_device(void)
 {
 	int current_slave_count;
 	struct ether_addr read_mac_addr, *mac_addr;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	TEST_ASSERT_SUCCESS(rte_eth_bond_slave_remove(test_params->bonded_port_id,
 			test_params->slave_port_ids[test_params->bonded_slave_count-1]),
@@ -496,7 +439,7 @@ static int
 test_add_already_bonded_slave_to_bonded_device(void)
 {
 	int port_id, current_slave_count;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 	char pmd_name[RTE_ETH_NAME_MAX_LEN];
 
 	test_add_slave_to_bonded_device();
@@ -528,7 +471,7 @@ static int
 test_get_slaves_from_bonded_device(void)
 {
 	int current_slave_count;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	TEST_ASSERT_SUCCESS(test_add_slave_to_bonded_device(),
 			"Failed to add slave to bonded device");
@@ -609,7 +552,7 @@ test_start_bonded_device(void)
 	struct rte_eth_link link_status;
 
 	int current_slave_count, current_bonding_mode, primary_port;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	/* Add slave to bonded device*/
 	TEST_ASSERT_SUCCESS(test_add_slave_to_bonded_device(),
@@ -658,7 +601,7 @@ static int
 test_stop_bonded_device(void)
 {
 	int current_slave_count;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	struct rte_eth_link link_status;
 
@@ -932,7 +875,7 @@ test_set_bonded_port_initialization_mac_assignment(void)
 {
 	int i, slave_count, bonded_port_id;
 
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 	int slave_port_ids[BONDED_INIT_MAC_ASSIGNMENT_SLAVE_COUNT];
 
 	struct ether_addr slave_mac_addr, bonded_mac_addr, read_mac_addr;
@@ -1114,7 +1057,7 @@ test_set_bonded_port_initialization_mac_assignment(void)
 
 static int
 initialize_bonded_device_with_slaves(uint8_t bonding_mode, uint8_t bond_en_isr,
-		uint8_t number_of_slaves, uint8_t enable_slave)
+		uint16_t number_of_slaves, uint8_t enable_slave)
 {
 	/* Configure bonded device */
 	TEST_ASSERT_SUCCESS(configure_ethdev(test_params->bonded_port_id, 0,
@@ -1179,7 +1122,7 @@ int test_lsc_interrupt_count;
 
 
 static int
-test_bonding_lsc_event_callback(uint8_t port_id __rte_unused,
+test_bonding_lsc_event_callback(uint16_t port_id __rte_unused,
 		enum rte_eth_event_type type  __rte_unused,
 		void *param __rte_unused,
 		void *ret_param __rte_unused)
@@ -1224,7 +1167,7 @@ static int
 test_status_interrupt(void)
 {
 	int slave_count;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	/* initialized bonding device with T slaves */
 	TEST_ASSERT_SUCCESS(initialize_bonded_device_with_slaves(
@@ -1313,7 +1256,7 @@ test_status_interrupt(void)
 static int
 generate_test_burst(struct rte_mbuf **pkts_burst, uint16_t burst_size,
 		uint8_t vlan, uint8_t ipv4, uint8_t toggle_dst_mac,
-		uint8_t toggle_ip_addr, uint8_t toggle_udp_port)
+		uint8_t toggle_ip_addr, uint16_t toggle_udp_port)
 {
 	uint16_t pktlen, generated_burst_size, ether_type;
 	void *ip_hdr;
@@ -1854,7 +1797,7 @@ test_roundrobin_verify_slave_link_status_change_behaviour(void)
 	struct rte_mbuf *rx_pkt_burst[MAX_PKT_BURST] = { NULL };
 
 	struct rte_eth_stats port_stats;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	int i, burst_size, slave_count;
 
@@ -2408,7 +2351,7 @@ test_activebackup_verify_slave_link_status_change_failover(void)
 	struct rte_mbuf *rx_pkt_burst[MAX_PKT_BURST] = { NULL };
 	struct rte_eth_stats port_stats;
 
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	int i, burst_size, slave_count, primary_port;
 
@@ -3302,7 +3245,7 @@ test_balance_verify_slave_link_status_change_behaviour(void)
 	struct rte_mbuf *rx_pkt_burst[MAX_PKT_BURST] = { NULL };
 	struct rte_eth_stats port_stats;
 
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	int i, burst_size, slave_count;
 
@@ -3861,7 +3804,7 @@ test_broadcast_verify_slave_link_status_change_behaviour(void)
 	struct rte_mbuf *rx_pkt_burst[MAX_PKT_BURST] = { NULL };
 	struct rte_eth_stats port_stats;
 
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	int i, burst_size, slave_count;
 
@@ -4373,7 +4316,7 @@ test_tlb_verify_slave_link_status_change_failover(void)
 	struct rte_mbuf *rx_pkt_burst[MAX_PKT_BURST] = { NULL };
 	struct rte_eth_stats port_stats;
 
-	uint8_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t slaves[RTE_MAX_ETHPORTS];
 
 	int i, burst_size, slave_count, primary_port;
 

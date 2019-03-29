@@ -1,40 +1,14 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright (C) Cavium, Inc. 2017.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Cavium, Inc nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Cavium, Inc
  */
-
 
 #include <rte_common.h>
 #include <rte_branch_prediction.h>
 
+#include <octeontx_mbox.h>
+
 #include "ssovf_evdev.h"
+#include "octeontx_rxtx.h"
 
 enum {
 	SSO_SYNC_ORDERED,
@@ -49,6 +23,29 @@ enum {
 
 /* SSO Operations */
 
+static __rte_always_inline struct rte_mbuf *
+ssovf_octeontx_wqe_to_pkt(uint64_t work, uint16_t port_info)
+{
+	struct rte_mbuf *mbuf;
+	octtx_wqe_t *wqe = (octtx_wqe_t *)(uintptr_t)work;
+
+	/* Get mbuf from wqe */
+	mbuf = (struct rte_mbuf *)((uintptr_t)wqe -
+			OCTTX_PACKET_WQE_SKIP);
+	rte_prefetch_non_temporal(mbuf);
+	mbuf->packet_type =
+		ptype_table[wqe->s.w2.lcty][wqe->s.w2.lety][wqe->s.w2.lfty];
+	mbuf->data_off = RTE_PTR_DIFF(wqe->s.w3.addr, mbuf->buf_addr);
+	mbuf->pkt_len = wqe->s.w1.len;
+	mbuf->data_len = mbuf->pkt_len;
+	mbuf->nb_segs = 1;
+	mbuf->ol_flags = 0;
+	mbuf->port = rte_octeontx_pchan_map[port_info >> 4][port_info & 0xF];
+	rte_mbuf_refcnt_set(mbuf, 1);
+
+	return mbuf;
+}
+
 static __rte_always_inline uint16_t
 ssows_get_work(struct ssows *ws, struct rte_event *ev)
 {
@@ -61,9 +58,14 @@ ssows_get_work(struct ssows *ws, struct rte_event *ev)
 	ws->cur_tt = sched_type_queue & 0x3;
 	ws->cur_grp = sched_type_queue >> 2;
 	sched_type_queue = sched_type_queue << 38;
-
 	ev->event = sched_type_queue | (get_work0 & 0xffffffff);
-	ev->u64 = get_work1;
+	if (get_work1 && ev->event_type == RTE_EVENT_TYPE_ETHDEV) {
+		ev->mbuf = ssovf_octeontx_wqe_to_pkt(get_work1,
+				(ev->event >> 20) & 0x7F);
+	} else {
+		ev->u64 = get_work1;
+	}
+
 	return !!get_work1;
 }
 

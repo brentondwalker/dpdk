@@ -1,35 +1,6 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
- *   Copyright(c) 2017, Linaro Limited
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016-2018 Intel Corporation.
+ * Copyright(c) 2017-2018 Linaro Limited.
  */
 
 #ifndef __L3FWD_EM_HLM_H__
@@ -52,7 +23,7 @@
 
 static __rte_always_inline void
 em_get_dst_port_ipv4xN(struct lcore_conf *qconf, struct rte_mbuf *m[],
-		uint8_t portid, uint16_t dst_port[])
+		uint16_t portid, uint16_t dst_port[])
 {
 	int i;
 	int32_t ret[EM_HASH_LOOKUP_COUNT];
@@ -68,7 +39,7 @@ em_get_dst_port_ipv4xN(struct lcore_conf *qconf, struct rte_mbuf *m[],
 			     EM_HASH_LOOKUP_COUNT, ret);
 
 	for (i = 0; i < EM_HASH_LOOKUP_COUNT; i++) {
-		dst_port[i] = (uint8_t) ((ret[i] < 0) ?
+		dst_port[i] = ((ret[i] < 0) ?
 				portid : ipv4_l3fwd_out_if[ret[i]]);
 
 		if (dst_port[i] >= RTE_MAX_ETHPORTS ||
@@ -79,7 +50,7 @@ em_get_dst_port_ipv4xN(struct lcore_conf *qconf, struct rte_mbuf *m[],
 
 static __rte_always_inline void
 em_get_dst_port_ipv6xN(struct lcore_conf *qconf, struct rte_mbuf *m[],
-		uint8_t portid, uint16_t dst_port[])
+		uint16_t portid, uint16_t dst_port[])
 {
 	int i;
 	int32_t ret[EM_HASH_LOOKUP_COUNT];
@@ -95,7 +66,7 @@ em_get_dst_port_ipv6xN(struct lcore_conf *qconf, struct rte_mbuf *m[],
 			     EM_HASH_LOOKUP_COUNT, ret);
 
 	for (i = 0; i < EM_HASH_LOOKUP_COUNT; i++) {
-		dst_port[i] = (uint8_t) ((ret[i] < 0) ?
+		dst_port[i] = ((ret[i] < 0) ?
 				portid : ipv6_l3fwd_out_if[ret[i]]);
 
 		if (dst_port[i] >= RTE_MAX_ETHPORTS ||
@@ -106,9 +77,9 @@ em_get_dst_port_ipv6xN(struct lcore_conf *qconf, struct rte_mbuf *m[],
 
 static __rte_always_inline uint16_t
 em_get_dst_port(const struct lcore_conf *qconf, struct rte_mbuf *pkt,
-		uint8_t portid)
+		uint16_t portid)
 {
-	uint8_t next_hop;
+	uint16_t next_hop;
 	struct ipv4_hdr *ipv4_hdr;
 	struct ipv6_hdr *ipv6_hdr;
 	uint32_t tcp_or_udp;
@@ -158,7 +129,7 @@ em_get_dst_port(const struct lcore_conf *qconf, struct rte_mbuf *pkt,
  */
 static inline void
 l3fwd_em_send_packets(int nb_rx, struct rte_mbuf **pkts_burst,
-		uint8_t portid, struct lcore_conf *qconf)
+		uint16_t portid, struct lcore_conf *qconf)
 {
 	int32_t i, j, pos;
 	uint16_t dst_port[MAX_PKT_BURST];

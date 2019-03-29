@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2014 Intel Corporation
  */
 
 #ifndef RTE_ETH_BOND_8023AD_PRIVATE_H_
@@ -203,7 +174,7 @@ struct mode8023ad_private {
  * The pool of *port* structures. The size of the pool
  * is configured at compile-time in the <rte_eth_bond_8023ad.c> file.
  */
-extern struct port mode_8023ad_ports[];
+extern struct port bond_mode_8023ad_ports[];
 
 /* Forward declaration */
 struct bond_dev_private;
@@ -279,7 +250,7 @@ bond_mode_8023ad_stop(struct rte_eth_dev *dev);
  */
 void
 bond_mode_8023ad_handle_slow_pkt(struct bond_dev_private *internals,
-	uint8_t slave_id, struct rte_mbuf *pkt);
+				 uint16_t slave_id, struct rte_mbuf *pkt);
 
 /**
  * @internal
@@ -293,7 +264,7 @@ bond_mode_8023ad_handle_slow_pkt(struct bond_dev_private *internals,
  *  0 on success, negative value otherwise.
  */
 void
-bond_mode_8023ad_activate_slave(struct rte_eth_dev *dev, uint8_t port_id);
+bond_mode_8023ad_activate_slave(struct rte_eth_dev *dev, uint16_t port_id);
 
 /**
  * @internal
@@ -307,7 +278,7 @@ bond_mode_8023ad_activate_slave(struct rte_eth_dev *dev, uint8_t port_id);
  *  0 on success, negative value otherwise.
  */
 int
-bond_mode_8023ad_deactivate_slave(struct rte_eth_dev *dev, uint8_t slave_pos);
+bond_mode_8023ad_deactivate_slave(struct rte_eth_dev *dev, uint16_t slave_pos);
 
 /**
  * Updates state when MAC was changed on bonded device or one of its slaves.
@@ -318,12 +289,12 @@ bond_mode_8023ad_mac_address_update(struct rte_eth_dev *bond_dev);
 
 int
 bond_ethdev_8023ad_flow_verify(struct rte_eth_dev *bond_dev,
-		uint8_t slave_port);
+		uint16_t slave_port);
 
 int
-bond_ethdev_8023ad_flow_set(struct rte_eth_dev *bond_dev, uint8_t slave_port);
+bond_ethdev_8023ad_flow_set(struct rte_eth_dev *bond_dev, uint16_t slave_port);
 
 int
-bond_8023ad_slow_pkt_hw_filter_supported(uint8_t port_id);
+bond_8023ad_slow_pkt_hw_filter_supported(uint16_t port_id);
 
 #endif /* RTE_ETH_BOND_8023AD_H_ */

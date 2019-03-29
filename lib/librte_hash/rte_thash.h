@@ -53,6 +53,7 @@ extern "C" {
 
 #include <stdint.h>
 #include <rte_byteorder.h>
+#include <rte_config.h>
 #include <rte_ip.h>
 #include <rte_common.h>
 
@@ -207,15 +208,14 @@ static inline uint32_t
 rte_softrss(uint32_t *input_tuple, uint32_t input_len,
 		const uint8_t *rss_key)
 {
-	uint32_t i, j, ret = 0;
+	uint32_t i, j, map, ret = 0;
 
 	for (j = 0; j < input_len; j++) {
-		for (i = 0; i < 32; i++) {
-			if (input_tuple[j] & (1 << (31 - i))) {
-				ret ^= rte_cpu_to_be_32(((const uint32_t *)rss_key)[j]) << i |
+		for (map = input_tuple[j]; map;	map &= (map - 1)) {
+			i = rte_bsf32(map);
+			ret ^= rte_cpu_to_be_32(((const uint32_t *)rss_key)[j]) << (31 - i) |
 					(uint32_t)((uint64_t)(rte_cpu_to_be_32(((const uint32_t *)rss_key)[j + 1])) >>
-					(32 - i));
-			}
+					(i + 1));
 		}
 	}
 	return ret;
@@ -238,14 +238,13 @@ static inline uint32_t
 rte_softrss_be(uint32_t *input_tuple, uint32_t input_len,
 		const uint8_t *rss_key)
 {
-	uint32_t i, j, ret = 0;
+	uint32_t i, j, map, ret = 0;
 
 	for (j = 0; j < input_len; j++) {
-		for (i = 0; i < 32; i++) {
-			if (input_tuple[j] & (1 << (31 - i))) {
-				ret ^= ((const uint32_t *)rss_key)[j] << i |
-					(uint32_t)((uint64_t)(((const uint32_t *)rss_key)[j + 1]) >> (32 - i));
-			}
+		for (map = input_tuple[j]; map;	map &= (map - 1)) {
+			i = rte_bsf32(map);
+			ret ^= ((const uint32_t *)rss_key)[j] << (31 - i) |
+				(uint32_t)((uint64_t)(((const uint32_t *)rss_key)[j + 1]) >> (i + 1));
 		}
 	}
 	return ret;

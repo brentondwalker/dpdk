@@ -1,33 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2016-2017 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016-2017 Intel Corporation
  */
 
 #include <rte_cryptodev.h>
@@ -37,24 +9,37 @@
 
 static int
 cperf_set_ops_null_cipher(struct rte_crypto_op **ops,
-		struct rte_mbuf **bufs_in, struct rte_mbuf **bufs_out,
+		uint32_t src_buf_offset, uint32_t dst_buf_offset,
 		uint16_t nb_ops, struct rte_cryptodev_sym_session *sess,
 		const struct cperf_options *options,
 		const struct cperf_test_vector *test_vector __rte_unused,
-		uint16_t iv_offset __rte_unused)
+		uint16_t iv_offset __rte_unused, uint32_t *imix_idx)
 {
 	uint16_t i;
 
 	for (i = 0; i < nb_ops; i++) {
 		struct rte_crypto_sym_op *sym_op = ops[i]->sym;
 
+		ops[i]->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
 		rte_crypto_op_attach_sym_session(ops[i], sess);
 
-		sym_op->m_src = bufs_in[i];
-		sym_op->m_dst = bufs_out[i];
+		sym_op->m_src = (struct rte_mbuf *)((uint8_t *)ops[i] +
+							src_buf_offset);
+
+		/* Set dest mbuf to NULL if out-of-place (dst_buf_offset = 0) */
+		if (dst_buf_offset == 0)
+			sym_op->m_dst = NULL;
+		else
+			sym_op->m_dst = (struct rte_mbuf *)((uint8_t *)ops[i] +
+							dst_buf_offset);
 
 		/* cipher parameters */
-		sym_op->cipher.data.length = options->test_buffer_size;
+		if (options->imix_distribution_count) {
+			sym_op->cipher.data.length =
+				options->imix_buffer_sizes[*imix_idx];
+			*imix_idx = (*imix_idx + 1) % options->pool_sz;
+		} else
+			sym_op->cipher.data.length = options->test_buffer_size;
 		sym_op->cipher.data.offset = 0;
 	}
 
@@ -63,24 +48,37 @@ cperf_set_ops_null_cipher(struct rte_crypto_op **ops,
 
 static int
 cperf_set_ops_null_auth(struct rte_crypto_op **ops,
-		struct rte_mbuf **bufs_in, struct rte_mbuf **bufs_out,
+		uint32_t src_buf_offset, uint32_t dst_buf_offset,
 		uint16_t nb_ops, struct rte_cryptodev_sym_session *sess,
 		const struct cperf_options *options,
 		const struct cperf_test_vector *test_vector __rte_unused,
-		uint16_t iv_offset __rte_unused)
+		uint16_t iv_offset __rte_unused, uint32_t *imix_idx)
 {
 	uint16_t i;
 
 	for (i = 0; i < nb_ops; i++) {
 		struct rte_crypto_sym_op *sym_op = ops[i]->sym;
 
+		ops[i]->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
 		rte_crypto_op_attach_sym_session(ops[i], sess);
 
-		sym_op->m_src = bufs_in[i];
-		sym_op->m_dst = bufs_out[i];
+		sym_op->m_src = (struct rte_mbuf *)((uint8_t *)ops[i] +
+							src_buf_offset);
+
+		/* Set dest mbuf to NULL if out-of-place (dst_buf_offset = 0) */
+		if (dst_buf_offset == 0)
+			sym_op->m_dst = NULL;
+		else
+			sym_op->m_dst = (struct rte_mbuf *)((uint8_t *)ops[i] +
+							dst_buf_offset);
 
 		/* auth parameters */
-		sym_op->auth.data.length = options->test_buffer_size;
+		if (options->imix_distribution_count) {
+			sym_op->auth.data.length =
+				options->imix_buffer_sizes[*imix_idx];
+			*imix_idx = (*imix_idx + 1) % options->pool_sz;
+		} else
+			sym_op->auth.data.length = options->test_buffer_size;
 		sym_op->auth.data.offset = 0;
 	}
 
@@ -89,29 +87,42 @@ cperf_set_ops_null_auth(struct rte_crypto_op **ops,
 
 static int
 cperf_set_ops_cipher(struct rte_crypto_op **ops,
-		struct rte_mbuf **bufs_in, struct rte_mbuf **bufs_out,
+		uint32_t src_buf_offset, uint32_t dst_buf_offset,
 		uint16_t nb_ops, struct rte_cryptodev_sym_session *sess,
 		const struct cperf_options *options,
 		const struct cperf_test_vector *test_vector,
-		uint16_t iv_offset)
+		uint16_t iv_offset, uint32_t *imix_idx)
 {
 	uint16_t i;
 
 	for (i = 0; i < nb_ops; i++) {
 		struct rte_crypto_sym_op *sym_op = ops[i]->sym;
 
+		ops[i]->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
 		rte_crypto_op_attach_sym_session(ops[i], sess);
 
-		sym_op->m_src = bufs_in[i];
-		sym_op->m_dst = bufs_out[i];
+		sym_op->m_src = (struct rte_mbuf *)((uint8_t *)ops[i] +
+							src_buf_offset);
+
+		/* Set dest mbuf to NULL if out-of-place (dst_buf_offset = 0) */
+		if (dst_buf_offset == 0)
+			sym_op->m_dst = NULL;
+		else
+			sym_op->m_dst = (struct rte_mbuf *)((uint8_t *)ops[i] +
+							dst_buf_offset);
 
 		/* cipher parameters */
+		if (options->imix_distribution_count) {
+			sym_op->cipher.data.length =
+				options->imix_buffer_sizes[*imix_idx];
+			*imix_idx = (*imix_idx + 1) % options->pool_sz;
+		} else
+			sym_op->cipher.data.length = options->test_buffer_size;
+
 		if (options->cipher_algo == RTE_CRYPTO_CIPHER_SNOW3G_UEA2 ||
 				options->cipher_algo == RTE_CRYPTO_CIPHER_KASUMI_F8 ||
 				options->cipher_algo == RTE_CRYPTO_CIPHER_ZUC_EEA3)
-			sym_op->cipher.data.length = options->test_buffer_size << 3;
-		else
-			sym_op->cipher.data.length = options->test_buffer_size;
+			sym_op->cipher.data.length <<= 3;
 
 		sym_op->cipher.data.offset = 0;
 	}
@@ -132,21 +143,29 @@ cperf_set_ops_cipher(struct rte_crypto_op **ops,
 
 static int
 cperf_set_ops_auth(struct rte_crypto_op **ops,
-		struct rte_mbuf **bufs_in, struct rte_mbuf **bufs_out,
+		uint32_t src_buf_offset, uint32_t dst_buf_offset,
 		uint16_t nb_ops, struct rte_cryptodev_sym_session *sess,
 		const struct cperf_options *options,
 		const struct cperf_test_vector *test_vector,
-		uint16_t iv_offset)
+		uint16_t iv_offset, uint32_t *imix_idx)
 {
 	uint16_t i;
 
 	for (i = 0; i < nb_ops; i++) {
 		struct rte_crypto_sym_op *sym_op = ops[i]->sym;
 
+		ops[i]->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
 		rte_crypto_op_attach_sym_session(ops[i], sess);
 
-		sym_op->m_src = bufs_in[i];
-		sym_op->m_dst = bufs_out[i];
+		sym_op->m_src = (struct rte_mbuf *)((uint8_t *)ops[i] +
+							src_buf_offset);
+
+		/* Set dest mbuf to NULL if out-of-place (dst_buf_offset = 0) */
+		if (dst_buf_offset == 0)
+			sym_op->m_dst = NULL;
+		else
+			sym_op->m_dst = (struct rte_mbuf *)((uint8_t *)ops[i] +
+							dst_buf_offset);
 
 		if (test_vector->auth_iv.length) {
 			uint8_t *iv_ptr = rte_crypto_op_ctod_offset(ops[i],
@@ -167,13 +186,21 @@ cperf_set_ops_auth(struct rte_crypto_op **ops,
 			struct rte_mbuf *buf, *tbuf;
 
 			if (options->out_of_place) {
-				buf =  bufs_out[i];
+				buf = sym_op->m_dst;
 			} else {
-				tbuf =  bufs_in[i];
+				tbuf = sym_op->m_src;
 				while ((tbuf->next != NULL) &&
 						(offset >= tbuf->data_len)) {
 					offset -= tbuf->data_len;
 					tbuf = tbuf->next;
+				}
+				/*
+				 * If there is not enough room in segment,
+				 * place the digest in the next segment
+				 */
+				if ((tbuf->data_len - offset) < options->digest_sz) {
+					tbuf = tbuf->next;
+					offset = 0;
 				}
 				buf = tbuf;
 			}
@@ -181,16 +208,21 @@ cperf_set_ops_auth(struct rte_crypto_op **ops,
 			sym_op->auth.digest.data = rte_pktmbuf_mtod_offset(buf,
 					uint8_t *, offset);
 			sym_op->auth.digest.phys_addr =
-					rte_pktmbuf_mtophys_offset(buf,	offset);
+					rte_pktmbuf_iova_offset(buf, offset);
 
 		}
+
+		if (options->imix_distribution_count) {
+			sym_op->auth.data.length =
+				options->imix_buffer_sizes[*imix_idx];
+			*imix_idx = (*imix_idx + 1) % options->pool_sz;
+		} else
+			sym_op->auth.data.length = options->test_buffer_size;
 
 		if (options->auth_algo == RTE_CRYPTO_AUTH_SNOW3G_UIA2 ||
 				options->auth_algo == RTE_CRYPTO_AUTH_KASUMI_F9 ||
 				options->auth_algo == RTE_CRYPTO_AUTH_ZUC_EIA3)
-			sym_op->auth.data.length = options->test_buffer_size << 3;
-		else
-			sym_op->auth.data.length = options->test_buffer_size;
+			sym_op->auth.data.length <<= 3;
 
 		sym_op->auth.data.offset = 0;
 	}
@@ -211,29 +243,42 @@ cperf_set_ops_auth(struct rte_crypto_op **ops,
 
 static int
 cperf_set_ops_cipher_auth(struct rte_crypto_op **ops,
-		struct rte_mbuf **bufs_in, struct rte_mbuf **bufs_out,
+		uint32_t src_buf_offset, uint32_t dst_buf_offset,
 		uint16_t nb_ops, struct rte_cryptodev_sym_session *sess,
 		const struct cperf_options *options,
 		const struct cperf_test_vector *test_vector,
-		uint16_t iv_offset)
+		uint16_t iv_offset, uint32_t *imix_idx)
 {
 	uint16_t i;
 
 	for (i = 0; i < nb_ops; i++) {
 		struct rte_crypto_sym_op *sym_op = ops[i]->sym;
 
+		ops[i]->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
 		rte_crypto_op_attach_sym_session(ops[i], sess);
 
-		sym_op->m_src = bufs_in[i];
-		sym_op->m_dst = bufs_out[i];
+		sym_op->m_src = (struct rte_mbuf *)((uint8_t *)ops[i] +
+							src_buf_offset);
+
+		/* Set dest mbuf to NULL if out-of-place (dst_buf_offset = 0) */
+		if (dst_buf_offset == 0)
+			sym_op->m_dst = NULL;
+		else
+			sym_op->m_dst = (struct rte_mbuf *)((uint8_t *)ops[i] +
+							dst_buf_offset);
 
 		/* cipher parameters */
+		if (options->imix_distribution_count) {
+			sym_op->cipher.data.length =
+				options->imix_buffer_sizes[*imix_idx];
+			*imix_idx = (*imix_idx + 1) % options->pool_sz;
+		} else
+			sym_op->cipher.data.length = options->test_buffer_size;
+
 		if (options->cipher_algo == RTE_CRYPTO_CIPHER_SNOW3G_UEA2 ||
 				options->cipher_algo == RTE_CRYPTO_CIPHER_KASUMI_F8 ||
 				options->cipher_algo == RTE_CRYPTO_CIPHER_ZUC_EEA3)
-			sym_op->cipher.data.length = options->test_buffer_size << 3;
-		else
-			sym_op->cipher.data.length = options->test_buffer_size;
+			sym_op->cipher.data.length <<= 3;
 
 		sym_op->cipher.data.offset = 0;
 
@@ -248,13 +293,21 @@ cperf_set_ops_cipher_auth(struct rte_crypto_op **ops,
 			struct rte_mbuf *buf, *tbuf;
 
 			if (options->out_of_place) {
-				buf =  bufs_out[i];
+				buf = sym_op->m_dst;
 			} else {
-				tbuf =  bufs_in[i];
+				tbuf = sym_op->m_src;
 				while ((tbuf->next != NULL) &&
 						(offset >= tbuf->data_len)) {
 					offset -= tbuf->data_len;
 					tbuf = tbuf->next;
+				}
+				/*
+				 * If there is not enough room in segment,
+				 * place the digest in the next segment
+				 */
+				if ((tbuf->data_len - offset) < options->digest_sz) {
+					tbuf = tbuf->next;
+					offset = 0;
 				}
 				buf = tbuf;
 			}
@@ -262,15 +315,20 @@ cperf_set_ops_cipher_auth(struct rte_crypto_op **ops,
 			sym_op->auth.digest.data = rte_pktmbuf_mtod_offset(buf,
 					uint8_t *, offset);
 			sym_op->auth.digest.phys_addr =
-					rte_pktmbuf_mtophys_offset(buf,	offset);
+					rte_pktmbuf_iova_offset(buf, offset);
 		}
+
+		if (options->imix_distribution_count) {
+			sym_op->auth.data.length =
+				options->imix_buffer_sizes[*imix_idx];
+			*imix_idx = (*imix_idx + 1) % options->pool_sz;
+		} else
+			sym_op->auth.data.length = options->test_buffer_size;
 
 		if (options->auth_algo == RTE_CRYPTO_AUTH_SNOW3G_UIA2 ||
 				options->auth_algo == RTE_CRYPTO_AUTH_KASUMI_F9 ||
 				options->auth_algo == RTE_CRYPTO_AUTH_ZUC_EIA3)
-			sym_op->auth.data.length = options->test_buffer_size << 3;
-		else
-			sym_op->auth.data.length = options->test_buffer_size;
+			sym_op->auth.data.length <<= 3;
 
 		sym_op->auth.data.offset = 0;
 	}
@@ -300,29 +358,46 @@ cperf_set_ops_cipher_auth(struct rte_crypto_op **ops,
 
 static int
 cperf_set_ops_aead(struct rte_crypto_op **ops,
-		struct rte_mbuf **bufs_in, struct rte_mbuf **bufs_out,
+		uint32_t src_buf_offset, uint32_t dst_buf_offset,
 		uint16_t nb_ops, struct rte_cryptodev_sym_session *sess,
 		const struct cperf_options *options,
 		const struct cperf_test_vector *test_vector,
-		uint16_t iv_offset)
+		uint16_t iv_offset, uint32_t *imix_idx)
 {
 	uint16_t i;
+	/* AAD is placed after the IV */
+	uint16_t aad_offset = iv_offset +
+			RTE_ALIGN_CEIL(test_vector->aead_iv.length, 16);
 
 	for (i = 0; i < nb_ops; i++) {
 		struct rte_crypto_sym_op *sym_op = ops[i]->sym;
 
+		ops[i]->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
 		rte_crypto_op_attach_sym_session(ops[i], sess);
 
-		sym_op->m_src = bufs_in[i];
-		sym_op->m_dst = bufs_out[i];
+		sym_op->m_src = (struct rte_mbuf *)((uint8_t *)ops[i] +
+							src_buf_offset);
+
+		/* Set dest mbuf to NULL if out-of-place (dst_buf_offset = 0) */
+		if (dst_buf_offset == 0)
+			sym_op->m_dst = NULL;
+		else
+			sym_op->m_dst = (struct rte_mbuf *)((uint8_t *)ops[i] +
+							dst_buf_offset);
 
 		/* AEAD parameters */
-		sym_op->aead.data.length = options->test_buffer_size;
-		sym_op->aead.data.offset =
-				RTE_ALIGN_CEIL(options->aead_aad_sz, 16);
+		if (options->imix_distribution_count) {
+			sym_op->aead.data.length =
+				options->imix_buffer_sizes[*imix_idx];
+			*imix_idx = (*imix_idx + 1) % options->pool_sz;
+		} else
+			sym_op->aead.data.length = options->test_buffer_size;
+		sym_op->aead.data.offset = 0;
 
-		sym_op->aead.aad.data = rte_pktmbuf_mtod(bufs_in[i], uint8_t *);
-		sym_op->aead.aad.phys_addr = rte_pktmbuf_mtophys(bufs_in[i]);
+		sym_op->aead.aad.data = rte_crypto_op_ctod_offset(ops[i],
+					uint8_t *, aad_offset);
+		sym_op->aead.aad.phys_addr = rte_crypto_op_ctophys_offset(ops[i],
+					aad_offset);
 
 		if (options->aead_op == RTE_CRYPTO_AEAD_OP_DECRYPT) {
 			sym_op->aead.digest.data = test_vector->digest.data;
@@ -335,13 +410,21 @@ cperf_set_ops_aead(struct rte_crypto_op **ops,
 			struct rte_mbuf *buf, *tbuf;
 
 			if (options->out_of_place) {
-				buf =  bufs_out[i];
+				buf = sym_op->m_dst;
 			} else {
-				tbuf =  bufs_in[i];
+				tbuf = sym_op->m_src;
 				while ((tbuf->next != NULL) &&
 						(offset >= tbuf->data_len)) {
 					offset -= tbuf->data_len;
 					tbuf = tbuf->next;
+				}
+				/*
+				 * If there is not enough room in segment,
+				 * place the digest in the next segment
+				 */
+				if ((tbuf->data_len - offset) < options->digest_sz) {
+					tbuf = tbuf->next;
+					offset = 0;
 				}
 				buf = tbuf;
 			}
@@ -349,7 +432,7 @@ cperf_set_ops_aead(struct rte_crypto_op **ops,
 			sym_op->aead.digest.data = rte_pktmbuf_mtod_offset(buf,
 					uint8_t *, offset);
 			sym_op->aead.digest.phys_addr =
-					rte_pktmbuf_mtophys_offset(buf,	offset);
+					rte_pktmbuf_iova_offset(buf, offset);
 		}
 	}
 
@@ -358,8 +441,26 @@ cperf_set_ops_aead(struct rte_crypto_op **ops,
 			uint8_t *iv_ptr = rte_crypto_op_ctod_offset(ops[i],
 					uint8_t *, iv_offset);
 
-			memcpy(iv_ptr, test_vector->aead_iv.data,
+			/*
+			 * If doing AES-CCM, nonce is copied one byte
+			 * after the start of IV field, and AAD is copied
+			 * 18 bytes after the start of the AAD field.
+			 */
+			if (options->aead_algo == RTE_CRYPTO_AEAD_AES_CCM) {
+				memcpy(iv_ptr + 1, test_vector->aead_iv.data,
 					test_vector->aead_iv.length);
+
+				memcpy(ops[i]->sym->aead.aad.data + 18,
+					test_vector->aad.data,
+					test_vector->aad.length);
+			} else {
+				memcpy(iv_ptr, test_vector->aead_iv.data,
+					test_vector->aead_iv.length);
+
+				memcpy(ops[i]->sym->aead.aad.data,
+					test_vector->aad.data,
+					test_vector->aad.length);
+			}
 		}
 	}
 
@@ -413,6 +514,7 @@ cperf_create_session(struct rte_mempool *sess_mp,
 		auth_xform.next = NULL;
 		auth_xform.auth.algo = options->auth_algo;
 		auth_xform.auth.op = options->auth_op;
+		auth_xform.auth.iv.offset = iv_offset;
 
 		/* auth different than null */
 		if (options->auth_algo != RTE_CRYPTO_AUTH_NULL) {
@@ -467,6 +569,8 @@ cperf_create_session(struct rte_mempool *sess_mp,
 		auth_xform.next = NULL;
 		auth_xform.auth.algo = options->auth_algo;
 		auth_xform.auth.op = options->auth_op;
+		auth_xform.auth.iv.offset = iv_offset +
+			cipher_xform.cipher.iv.length;
 
 		/* auth different than null */
 		if (options->auth_algo != RTE_CRYPTO_AUTH_NULL) {

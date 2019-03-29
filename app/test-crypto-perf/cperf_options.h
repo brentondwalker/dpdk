@@ -1,8 +1,12 @@
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2018 Intel Corporation
+ */
 
 #ifndef _CPERF_OPTIONS_
 #define _CPERF_OPTIONS_
 
 #include <rte_crypto.h>
+#include <rte_cryptodev.h>
 
 #define CPERF_PTEST_TYPE	("ptest")
 #define CPERF_SILENT		("silent")
@@ -11,7 +15,9 @@
 #define CPERF_TOTAL_OPS		("total-ops")
 #define CPERF_BURST_SIZE	("burst-sz")
 #define CPERF_BUFFER_SIZE	("buffer-sz")
-#define CPERF_SEGMENTS_NB	("segments-nb")
+#define CPERF_SEGMENT_SIZE	("segment-sz")
+#define CPERF_DESC_NB		("desc-nb")
+#define CPERF_IMIX		("imix")
 
 #define CPERF_DEVTYPE		("devtype")
 #define CPERF_OPTYPE		("optype")
@@ -40,12 +46,16 @@
 
 #define CPERF_CSV		("csv-friendly")
 
+/* benchmark-specific options */
+#define CPERF_PMDCC_DELAY_MS	("pmd-cyclecount-delay-ms")
+
 #define MAX_LIST 32
 
 enum cperf_perf_test_type {
 	CPERF_TEST_TYPE_THROUGHPUT,
 	CPERF_TEST_TYPE_LATENCY,
-	CPERF_TEST_TYPE_VERIFY
+	CPERF_TEST_TYPE_VERIFY,
+	CPERF_TEST_TYPE_PMDCC
 };
 
 
@@ -66,8 +76,13 @@ struct cperf_options {
 
 	uint32_t pool_sz;
 	uint32_t total_ops;
-	uint32_t segments_nb;
+	uint32_t headroom_sz;
+	uint32_t tailroom_sz;
+	uint32_t segment_sz;
 	uint32_t test_buffer_size;
+	uint32_t *imix_buffer_sizes;
+	uint32_t nb_descriptors;
+	uint16_t nb_qps;
 
 	uint32_t sessionless:1;
 	uint32_t out_of_place:1;
@@ -95,7 +110,7 @@ struct cperf_options {
 
 	uint16_t digest_sz;
 
-	char device_type[RTE_CRYPTODEV_NAME_LEN];
+	char device_type[RTE_CRYPTODEV_NAME_MAX_LEN];
 	enum cperf_op_type op_type;
 
 	char *test_file;
@@ -113,6 +128,10 @@ struct cperf_options {
 	uint32_t min_burst_size;
 	uint32_t inc_burst_size;
 
+	/* pmd-cyclecount specific options */
+	uint32_t pmdcc_delay;
+	uint32_t imix_distribution_list[MAX_LIST];
+	uint8_t imix_distribution_count;
 };
 
 void

@@ -1,33 +1,5 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright (C) Cavium, Inc. 2017.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Cavium, Inc nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2017 Cavium, Inc
  */
 
 #include <stdbool.h>
@@ -36,8 +8,7 @@
 #include <rte_hexdump.h>
 #include <rte_cryptodev.h>
 #include <rte_cryptodev_pmd.h>
-#include <rte_cryptodev_vdev.h>
-#include <rte_vdev.h>
+#include <rte_bus_vdev.h>
 #include <rte_malloc.h>
 #include <rte_cpuflags.h>
 
@@ -531,7 +502,7 @@ get_session(struct armv8_crypto_qp *qp, struct rte_crypto_op *op)
 		/* get existing session */
 		if (likely(op->sym->session != NULL)) {
 			sess = (struct armv8_crypto_session *)
-					get_session_private_data(
+					get_sym_session_private_data(
 					op->sym->session,
 					cryptodev_driver_id);
 		}
@@ -555,8 +526,8 @@ get_session(struct armv8_crypto_qp *qp, struct rte_crypto_op *op)
 			sess = NULL;
 		}
 		op->sym->session = (struct rte_cryptodev_sym_session *)_sess;
-		set_session_private_data(op->sym->session, cryptodev_driver_id,
-			_sess_private_data);
+		set_sym_session_private_data(op->sym->session,
+				cryptodev_driver_id, _sess_private_data);
 	}
 
 	if (unlikely(sess == NULL))
@@ -575,8 +546,8 @@ get_session(struct armv8_crypto_qp *qp, struct rte_crypto_op *op)
 
 /** Process cipher operation */
 static inline void
-process_armv8_chained_op
-		(struct rte_crypto_op *op, struct armv8_crypto_session *sess,
+process_armv8_chained_op(struct armv8_crypto_qp *qp, struct rte_crypto_op *op,
+		struct armv8_crypto_session *sess,
 		struct rte_mbuf *mbuf_src, struct rte_mbuf *mbuf_dst)
 {
 	crypto_func_t crypto_func;
@@ -633,8 +604,7 @@ process_armv8_chained_op
 					op->sym->auth.data.length);
 		}
 	} else {
-		adst = (uint8_t *)rte_pktmbuf_append(m_asrc,
-				sess->auth.digest_length);
+		adst = qp->temp_digest;
 	}
 
 	arg.cipher.iv = rte_crypto_op_ctod_offset(op, uint8_t *,
@@ -655,15 +625,12 @@ process_armv8_chained_op
 				sess->auth.digest_length) != 0) {
 			op->status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
 		}
-		/* Trim area used for digest from mbuf. */
-		rte_pktmbuf_trim(m_asrc,
-				sess->auth.digest_length);
 	}
 }
 
 /** Process crypto operation for mbuf */
 static inline int
-process_op(const struct armv8_crypto_qp *qp, struct rte_crypto_op *op,
+process_op(struct armv8_crypto_qp *qp, struct rte_crypto_op *op,
 		struct armv8_crypto_session *sess)
 {
 	struct rte_mbuf *msrc, *mdst;
@@ -676,7 +643,7 @@ process_op(const struct armv8_crypto_qp *qp, struct rte_crypto_op *op,
 	switch (sess->chain_order) {
 	case ARMV8_CRYPTO_CHAIN_CIPHER_AUTH:
 	case ARMV8_CRYPTO_CHAIN_AUTH_CIPHER: /* Fall through */
-		process_armv8_chained_op(op, sess, msrc, mdst);
+		process_armv8_chained_op(qp, op, sess, msrc, mdst);
 		break;
 	default:
 		op->status = RTE_CRYPTO_OP_STATUS_ERROR;
@@ -687,7 +654,7 @@ process_op(const struct armv8_crypto_qp *qp, struct rte_crypto_op *op,
 	if (op->sess_type == RTE_CRYPTO_OP_SESSIONLESS) {
 		memset(sess, 0, sizeof(struct armv8_crypto_session));
 		memset(op->sym->session, 0,
-				rte_cryptodev_get_header_session_size());
+				rte_cryptodev_sym_get_header_session_size());
 		rte_mempool_put(qp->sess_mp, sess);
 		rte_mempool_put(qp->sess_mp, op->sym->session);
 		op->sym->session = NULL;
@@ -763,7 +730,7 @@ armv8_crypto_pmd_dequeue_burst(void *queue_pair, struct rte_crypto_op **ops,
 static int
 cryptodev_armv8_crypto_create(const char *name,
 			struct rte_vdev_device *vdev,
-			struct rte_crypto_vdev_init_params *init_params)
+			struct rte_cryptodev_pmd_init_params *init_params)
 {
 	struct rte_cryptodev *dev;
 	struct armv8_crypto_private *internals;
@@ -790,14 +757,7 @@ cryptodev_armv8_crypto_create(const char *name,
 		return -EFAULT;
 	}
 
-	if (init_params->name[0] == '\0')
-		snprintf(init_params->name, sizeof(init_params->name),
-				"%s", name);
-
-	dev = rte_cryptodev_vdev_pmd_init(init_params->name,
-				sizeof(struct armv8_crypto_private),
-				init_params->socket_id,
-				vdev);
+	dev = rte_cryptodev_pmd_create(name, &vdev->device, init_params);
 	if (dev == NULL) {
 		ARMV8_CRYPTO_LOG_ERR("failed to create cryptodev vdev");
 		goto init_error;
@@ -819,7 +779,6 @@ cryptodev_armv8_crypto_create(const char *name,
 	internals = dev->data->dev_private;
 
 	internals->max_nb_qpairs = init_params->max_nb_queue_pairs;
-	internals->max_nb_sessions = init_params->max_nb_sessions;
 
 	return 0;
 
@@ -836,11 +795,11 @@ init_error:
 static int
 cryptodev_armv8_crypto_init(struct rte_vdev_device *vdev)
 {
-	struct rte_crypto_vdev_init_params init_params = {
-		RTE_CRYPTODEV_VDEV_DEFAULT_MAX_NB_QUEUE_PAIRS,
-		RTE_CRYPTODEV_VDEV_DEFAULT_MAX_NB_SESSIONS,
+	struct rte_cryptodev_pmd_init_params init_params = {
+		"",
+		sizeof(struct armv8_crypto_private),
 		rte_socket_id(),
-		{0}
+		RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_QUEUE_PAIRS
 	};
 	const char *name;
 	const char *input_args;
@@ -849,18 +808,7 @@ cryptodev_armv8_crypto_init(struct rte_vdev_device *vdev)
 	if (name == NULL)
 		return -EINVAL;
 	input_args = rte_vdev_device_args(vdev);
-	rte_cryptodev_vdev_parse_init_params(&init_params, input_args);
-
-	RTE_LOG(INFO, PMD, "Initialising %s on NUMA node %d\n", name,
-			init_params.socket_id);
-	if (init_params.name[0] != '\0') {
-		RTE_LOG(INFO, PMD, "  User defined name = %s\n",
-			init_params.name);
-	}
-	RTE_LOG(INFO, PMD, "  Max number of queue pairs = %d\n",
-			init_params.max_nb_queue_pairs);
-	RTE_LOG(INFO, PMD, "  Max number of sessions = %d\n",
-			init_params.max_nb_sessions);
+	rte_cryptodev_pmd_parse_input_args(&init_params, input_args);
 
 	return cryptodev_armv8_crypto_create(name, vdev, &init_params);
 }
@@ -869,6 +817,7 @@ cryptodev_armv8_crypto_init(struct rte_vdev_device *vdev)
 static int
 cryptodev_armv8_crypto_uninit(struct rte_vdev_device *vdev)
 {
+	struct rte_cryptodev *cryptodev;
 	const char *name;
 
 	name = rte_vdev_device_name(vdev);
@@ -879,18 +828,24 @@ cryptodev_armv8_crypto_uninit(struct rte_vdev_device *vdev)
 		"Closing ARMv8 crypto device %s on numa socket %u\n",
 		name, rte_socket_id());
 
-	return 0;
+	cryptodev = rte_cryptodev_pmd_get_named_dev(name);
+	if (cryptodev == NULL)
+		return -ENODEV;
+
+	return rte_cryptodev_pmd_destroy(cryptodev);
 }
 
-static struct rte_vdev_driver armv8_crypto_drv = {
+static struct rte_vdev_driver armv8_crypto_pmd_drv = {
 	.probe = cryptodev_armv8_crypto_init,
 	.remove = cryptodev_armv8_crypto_uninit
 };
 
-RTE_PMD_REGISTER_VDEV(CRYPTODEV_NAME_ARMV8_PMD, armv8_crypto_drv);
+static struct cryptodev_driver armv8_crypto_drv;
+
+RTE_PMD_REGISTER_VDEV(CRYPTODEV_NAME_ARMV8_PMD, armv8_crypto_pmd_drv);
 RTE_PMD_REGISTER_ALIAS(CRYPTODEV_NAME_ARMV8_PMD, cryptodev_armv8_pmd);
 RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_ARMV8_PMD,
 	"max_nb_queue_pairs=<int> "
-	"max_nb_sessions=<int> "
 	"socket_id=<int>");
-RTE_PMD_REGISTER_CRYPTO_DRIVER(armv8_crypto_drv, cryptodev_driver_id);
+RTE_PMD_REGISTER_CRYPTO_DRIVER(armv8_crypto_drv, armv8_crypto_pmd_drv.driver,
+		cryptodev_driver_id);

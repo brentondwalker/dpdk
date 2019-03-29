@@ -1,34 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2010-2014 Intel Corporation. All rights reserved.
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2010-2014 Intel Corporation
  */
 
 #include <string.h>
@@ -62,8 +33,8 @@
 
 #define SLAVE_COUNT (4)
 
-#define RX_RING_SIZE 128
-#define TX_RING_SIZE 512
+#define RX_RING_SIZE 1024
+#define TX_RING_SIZE 1024
 
 #define MBUF_CACHE_SIZE         (250)
 #define BURST_SIZE              (32)
@@ -102,7 +73,7 @@ static const struct ether_addr slow_protocol_mac_addr = {
 struct slave_conf {
 	struct rte_ring *rx_queue;
 	struct rte_ring *tx_queue;
-	uint8_t port_id;
+	uint16_t port_id;
 	uint8_t bonded : 1;
 
 	uint8_t lacp_parnter_state;
@@ -139,11 +110,6 @@ static struct rte_eth_conf default_pmd_conf = {
 		.mq_mode = ETH_MQ_RX_NONE,
 		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.header_split   = 0, /**< Header Split disabled */
-		.hw_ip_checksum = 0, /**< IP checksum offload enabled */
-		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
-		.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
-		.hw_strip_crc   = 1, /**< CRC stripped by hardware */
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -235,7 +201,7 @@ free_pkts(struct rte_mbuf **pkts, uint16_t count)
 }
 
 static int
-configure_ethdev(uint8_t port_id, uint8_t start)
+configure_ethdev(uint16_t port_id, uint8_t start)
 {
 	TEST_ASSERT(rte_eth_dev_configure(port_id, 1, 1, &default_pmd_conf) == 0,
 		"Failed to configure device %u", port_id);
@@ -325,7 +291,7 @@ remove_slave(struct slave_conf *slave)
 }
 
 static void
-lacp_recv_cb(uint8_t slave_id, struct rte_mbuf *lacp_pkt)
+lacp_recv_cb(uint16_t slave_id, struct rte_mbuf *lacp_pkt)
 {
 	struct ether_hdr *hdr;
 	struct slow_protocol_frame *slow_hdr;
@@ -343,7 +309,7 @@ lacp_recv_cb(uint8_t slave_id, struct rte_mbuf *lacp_pkt)
 }
 
 static int
-initialize_bonded_device_with_slaves(uint8_t slave_count, uint8_t external_sm)
+initialize_bonded_device_with_slaves(uint16_t slave_count, uint8_t external_sm)
 {
 	uint8_t i;
 
@@ -379,8 +345,8 @@ remove_slaves_and_stop_bonded_device(void)
 {
 	struct slave_conf *slave;
 	int retval;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
-	uint8_t i;
+	uint16_t slaves[RTE_MAX_ETHPORTS];
+	uint16_t i;
 
 	rte_eth_dev_stop(test_params.bonded_port_id);
 
@@ -411,7 +377,7 @@ test_setup(void)
 	char name[RTE_ETH_NAME_MAX_LEN];
 	struct slave_conf *port;
 	const uint8_t socket_id = rte_socket_id();
-	uint8_t i;
+	uint16_t i;
 
 	if (test_params.mbuf_pool == NULL) {
 		nb_mbuf_per_pool = TEST_RX_DESC_MAX + DEF_PKT_BURST +
@@ -454,7 +420,7 @@ test_setup(void)
 			TEST_ASSERT(retval >= 0,
 				"Failed to create ring ethdev '%s'\n", name);
 
-			port->port_id = rte_eth_dev_count() - 1;
+			port->port_id = rte_eth_dev_count_avail() - 1;
 		}
 
 		retval = configure_ethdev(port->port_id, 1);
@@ -661,7 +627,7 @@ bond_handshake(void)
 	TEST_ASSERT_EQUAL(all_slaves_done, 1, "Bond handshake failed\n");
 
 	/* If flags doesn't match - report failure */
-	return all_slaves_done = 1 ? TEST_SUCCESS : TEST_FAILED;
+	return all_slaves_done == 1 ? TEST_SUCCESS : TEST_FAILED;
 }
 
 #define TEST_LACP_SLAVE_COUT RTE_DIM(test_params.slave_ports)
@@ -1521,7 +1487,7 @@ check_environment(void)
 {
 	struct slave_conf *port;
 	uint8_t i, env_state;
-	uint8_t slaves[RTE_DIM(test_params.slave_ports)];
+	uint16_t slaves[RTE_DIM(test_params.slave_ports)];
 	int slaves_count;
 
 	env_state = 0;

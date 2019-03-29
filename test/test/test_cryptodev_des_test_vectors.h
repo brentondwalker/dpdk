@@ -1,33 +1,5 @@
-/*
- *   BSD LICENSE
- *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *	 * Redistributions of source code must retain the above copyright
- *	   notice, this list of conditions and the following disclaimer.
- *	 * Redistributions in binary form must reproduce the above copyright
- *	   notice, this list of conditions and the following disclaimer in
- *	   the documentation and/or other materials provided with the
- *	   distribution.
- *	 * Neither the name of Intel Corporation nor the names of its
- *	   contributors may be used to endorse or promote products derived
- *	   from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016 Intel Corporation
  */
 
 #ifndef TEST_CRYPTODEV_DES_TEST_VECTORS_H_
@@ -820,6 +792,30 @@ triple_des192cbc_hmac_sha1_test_vector = {
 		.len = 20
 	}
 };
+static const struct blockcipher_test_data
+triple_des64cbc_test_vector = {
+	.crypto_algo = RTE_CRYPTO_CIPHER_3DES_CBC,
+	.cipher_key = {
+		.data = {
+			0xE4, 0x23, 0x33, 0x8A, 0x35, 0x64, 0x61, 0xE2
+		},
+		.len = 8
+	},
+	.iv = {
+		.data = {
+			0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+		},
+		.len = 8
+	},
+	.plaintext = {
+		.data = plaintext_des,
+		.len = 512
+	},
+	.ciphertext = {
+		.data = ciphertext512_des,
+		.len = 512
+	},
+};
 
 static const struct blockcipher_test_data
 des_cbc_test_vector = {
@@ -851,13 +847,19 @@ static const struct blockcipher_test_case des_cipheronly_test_cases[] = {
 		.test_descr = "DES-CBC Encryption",
 		.test_data = &des_cbc_test_vector,
 		.op_mask = BLOCKCIPHER_TEST_OP_ENCRYPT,
-		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_QAT
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_QAT |
+			BLOCKCIPHER_TEST_TARGET_PMD_MB |
+			BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
+			BLOCKCIPHER_TEST_TARGET_PMD_MVSAM
 	},
 	{
 		.test_descr = "DES-CBC Decryption",
 		.test_data = &des_cbc_test_vector,
 		.op_mask = BLOCKCIPHER_TEST_OP_DECRYPT,
-		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_QAT
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_QAT |
+			BLOCKCIPHER_TEST_TARGET_PMD_MB |
+			BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
+			BLOCKCIPHER_TEST_TARGET_PMD_MVSAM
 	},
 
 };
@@ -965,42 +967,48 @@ static const struct blockcipher_test_case des_docsis_test_cases[] = {
 		.test_data = &des_test_data_1,
 		.op_mask = BLOCKCIPHER_TEST_OP_ENCRYPT,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
-			BLOCKCIPHER_TEST_TARGET_PMD_QAT
+			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
+			BLOCKCIPHER_TEST_TARGET_PMD_MB
 	},
 	{
 		.test_descr = "DES-DOCSIS-BPI Runt Block Encryption",
 		.test_data = &des_test_data_2,
 		.op_mask = BLOCKCIPHER_TEST_OP_ENCRYPT,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
-			BLOCKCIPHER_TEST_TARGET_PMD_QAT
+			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
+			BLOCKCIPHER_TEST_TARGET_PMD_MB
 	},
 	{
 		.test_descr = "DES-DOCSIS-BPI Uneven Encryption",
 		.test_data = &des_test_data_3,
 		.op_mask = BLOCKCIPHER_TEST_OP_ENCRYPT,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
-			BLOCKCIPHER_TEST_TARGET_PMD_QAT
+			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
+			BLOCKCIPHER_TEST_TARGET_PMD_MB
 	},
 	{
 		.test_descr = "DES-DOCSIS-BPI Full Block Decryption",
 		.test_data = &des_test_data_1,
 		.op_mask = BLOCKCIPHER_TEST_OP_DECRYPT,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
-			BLOCKCIPHER_TEST_TARGET_PMD_QAT
+			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
+			BLOCKCIPHER_TEST_TARGET_PMD_MB
 	},
 	{
 		.test_descr = "DES-DOCSIS-BPI Runt Block Decryption",
 		.test_data = &des_test_data_2,
 		.op_mask = BLOCKCIPHER_TEST_OP_DECRYPT,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
-			BLOCKCIPHER_TEST_TARGET_PMD_QAT
+			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
+			BLOCKCIPHER_TEST_TARGET_PMD_MB
 	},
 	{
 		.test_descr = "DES-DOCSIS-BPI Uneven Decryption",
 		.test_data = &des_test_data_3,
 		.op_mask = BLOCKCIPHER_TEST_OP_DECRYPT,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
-			BLOCKCIPHER_TEST_TARGET_PMD_QAT
+			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
+			BLOCKCIPHER_TEST_TARGET_PMD_MB
 	},
 	{
 		.test_descr = "DES-DOCSIS-BPI OOP Full Block Encryption",
@@ -1059,7 +1067,10 @@ static const struct blockcipher_test_case triple_des_chain_test_cases[] = {
 		.op_mask = BLOCKCIPHER_TEST_OP_ENC_AUTH_GEN,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
 			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
-			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_CAAM_JR |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP
 	},
 	{
 		.test_descr = "3DES-128-CBC HMAC-SHA1 Decryption Digest Verify",
@@ -1067,19 +1078,24 @@ static const struct blockcipher_test_case triple_des_chain_test_cases[] = {
 		.op_mask = BLOCKCIPHER_TEST_OP_AUTH_VERIFY_DEC,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
 			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
-			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_CAAM_JR |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP
 	},
 	{
 		.test_descr = "3DES-128-CBC SHA1 Encryption Digest",
 		.test_data = &triple_des128cbc_sha1_test_vector,
 		.op_mask = BLOCKCIPHER_TEST_OP_ENC_AUTH_GEN,
-		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP
 	},
 	{
 		.test_descr = "3DES-128-CBC SHA1 Decryption Digest Verify",
 		.test_data = &triple_des128cbc_sha1_test_vector,
 		.op_mask = BLOCKCIPHER_TEST_OP_AUTH_VERIFY_DEC,
-		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP
 	},
 	{
 		.test_descr = "3DES-192-CBC HMAC-SHA1 Encryption Digest",
@@ -1087,7 +1103,12 @@ static const struct blockcipher_test_case triple_des_chain_test_cases[] = {
 		.op_mask = BLOCKCIPHER_TEST_OP_ENC_AUTH_GEN,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
 			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
-			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_CAAM_JR |
+			BLOCKCIPHER_TEST_TARGET_PMD_MVSAM |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP |
+			BLOCKCIPHER_TEST_TARGET_PMD_OCTEONTX
 	},
 	{
 		.test_descr = "3DES-192-CBC HMAC-SHA1 Decryption Digest Verify",
@@ -1095,19 +1116,28 @@ static const struct blockcipher_test_case triple_des_chain_test_cases[] = {
 		.op_mask = BLOCKCIPHER_TEST_OP_AUTH_VERIFY_DEC,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
 			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
-			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_CAAM_JR |
+			BLOCKCIPHER_TEST_TARGET_PMD_MVSAM |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP |
+			BLOCKCIPHER_TEST_TARGET_PMD_OCTEONTX
 	},
 	{
 		.test_descr = "3DES-192-CBC SHA1 Encryption Digest",
 		.test_data = &triple_des192cbc_sha1_test_vector,
 		.op_mask = BLOCKCIPHER_TEST_OP_ENC_AUTH_GEN,
-		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
+			BLOCKCIPHER_TEST_TARGET_PMD_MVSAM |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP
 	},
 	{
 		.test_descr = "3DES-192-CBC SHA1 Decryption Digest Verify",
 		.test_data = &triple_des192cbc_sha1_test_vector,
 		.op_mask = BLOCKCIPHER_TEST_OP_AUTH_VERIFY_DEC,
-		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
+			BLOCKCIPHER_TEST_TARGET_PMD_MVSAM |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP
 	},
 	{
 		.test_descr = "3DES-128-CTR HMAC-SHA1 Encryption Digest",
@@ -1167,7 +1197,10 @@ static const struct blockcipher_test_case triple_des_chain_test_cases[] = {
 		.op_mask = BLOCKCIPHER_TEST_OP_ENC_AUTH_GEN,
 		.feature_mask = BLOCKCIPHER_TEST_FEATURE_OOP,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
-			BLOCKCIPHER_TEST_TARGET_PMD_QAT
+			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_CAAM_JR
 	},
 	{
 		.test_descr = "3DES-128-CBC HMAC-SHA1 Decryption Digest"
@@ -1176,7 +1209,10 @@ static const struct blockcipher_test_case triple_des_chain_test_cases[] = {
 		.op_mask = BLOCKCIPHER_TEST_OP_AUTH_VERIFY_DEC,
 		.feature_mask = BLOCKCIPHER_TEST_FEATURE_OOP,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
-			BLOCKCIPHER_TEST_TARGET_PMD_QAT
+			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_CAAM_JR
 	},
 	{
 		.test_descr = "3DES-128-CBC HMAC-SHA1 Encryption Digest"
@@ -1184,7 +1220,8 @@ static const struct blockcipher_test_case triple_des_chain_test_cases[] = {
 		.test_data = &triple_des128cbc_hmac_sha1_test_vector,
 		.op_mask = BLOCKCIPHER_TEST_OP_ENC_AUTH_GEN,
 		.feature_mask = BLOCKCIPHER_TEST_FEATURE_SESSIONLESS,
-		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP
 	},
 	{
 		.test_descr =
@@ -1193,18 +1230,39 @@ static const struct blockcipher_test_case triple_des_chain_test_cases[] = {
 		.test_data = &triple_des128cbc_hmac_sha1_test_vector,
 		.op_mask = BLOCKCIPHER_TEST_OP_AUTH_VERIFY_DEC,
 		.feature_mask = BLOCKCIPHER_TEST_FEATURE_SESSIONLESS,
-		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP
 	},
 };
 
 static const struct blockcipher_test_case triple_des_cipheronly_test_cases[] = {
+	{
+		.test_descr = "3DES-64-CBC Encryption",
+		.test_data = &triple_des64cbc_test_vector,
+		.op_mask = BLOCKCIPHER_TEST_OP_ENCRYPT,
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_MB |
+			BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
+			BLOCKCIPHER_TEST_TARGET_PMD_QAT
+	},
+	{
+		.test_descr = "3DES-64-CBC Decryption",
+		.test_data = &triple_des64cbc_test_vector,
+		.op_mask = BLOCKCIPHER_TEST_OP_DECRYPT,
+		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_MB |
+			BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
+			BLOCKCIPHER_TEST_TARGET_PMD_QAT
+	},
 	{
 		.test_descr = "3DES-128-CBC Encryption",
 		.test_data = &triple_des128cbc_test_vector,
 		.op_mask = BLOCKCIPHER_TEST_OP_ENCRYPT,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
 			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
-			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_CAAM_JR |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP |
+			BLOCKCIPHER_TEST_TARGET_PMD_MB
 	},
 	{
 		.test_descr = "3DES-128-CBC Decryption",
@@ -1212,7 +1270,11 @@ static const struct blockcipher_test_case triple_des_cipheronly_test_cases[] = {
 		.op_mask = BLOCKCIPHER_TEST_OP_DECRYPT,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
 			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
-			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_CAAM_JR |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP |
+			BLOCKCIPHER_TEST_TARGET_PMD_MB
 	},
 	{
 		.test_descr = "3DES-192-CBC Encryption",
@@ -1220,7 +1282,13 @@ static const struct blockcipher_test_case triple_des_cipheronly_test_cases[] = {
 		.op_mask = BLOCKCIPHER_TEST_OP_ENCRYPT,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
 			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
-			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_CAAM_JR |
+			BLOCKCIPHER_TEST_TARGET_PMD_MVSAM |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP |
+			BLOCKCIPHER_TEST_TARGET_PMD_MB |
+			BLOCKCIPHER_TEST_TARGET_PMD_OCTEONTX
 	},
 	{
 		.test_descr = "3DES-192-CBC Decryption",
@@ -1228,7 +1296,13 @@ static const struct blockcipher_test_case triple_des_cipheronly_test_cases[] = {
 		.op_mask = BLOCKCIPHER_TEST_OP_DECRYPT,
 		.pmd_mask = BLOCKCIPHER_TEST_TARGET_PMD_OPENSSL |
 			BLOCKCIPHER_TEST_TARGET_PMD_QAT |
-			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA2_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_DPAA_SEC |
+			BLOCKCIPHER_TEST_TARGET_PMD_CAAM_JR |
+			BLOCKCIPHER_TEST_TARGET_PMD_MVSAM |
+			BLOCKCIPHER_TEST_TARGET_PMD_CCP |
+			BLOCKCIPHER_TEST_TARGET_PMD_MB |
+			BLOCKCIPHER_TEST_TARGET_PMD_OCTEONTX
 	},
 	{
 		.test_descr = "3DES-128-CTR Encryption",
